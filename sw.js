@@ -1,13 +1,14 @@
 /* ПЦ Спорт — service worker.
    Оболочка приложения кешируется, запросы к API Яндекса идут только по сети. */
 
-var CACHE = 'pcsport-v1';
+var CACHE = 'pcsport-v2';
 var SHELL = [
   './',
   'index.html',
   'styles.css',
   'app.js',
   'storage.js',
+  'video.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

@@ -34,6 +34,8 @@
     </div>
     <div id="today-cards"></div>
     <div id="today-banner"></div>
+    <h2 style="margin-top:20px">Видео дня</h2>
+    <div id="today-videos"></div>
   </section>
 
   <!-- ================= ЖУРНАЛ ================= -->
@@ -165,6 +167,40 @@
   <button data-view="cfg"><span class="g">⚙</span>Настройки</button>
 </nav>
 
+<div class="rec-overlay" id="recOverlay">
+  <div class="rec-box">
+    <div class="rec-head">
+      <span id="rec-who">—</span>
+      <button id="rec-close" aria-label="Закрыть">✕</button>
+    </div>
+    <div class="rec-stage">
+      <video id="rec-live" autoplay muted playsinline></video>
+      <video id="rec-preview" playsinline controls hidden></video>
+      <div class="rec-timer" id="rec-timer" hidden></div>
+    </div>
+    <div class="rec-msg" id="rec-msg"></div>
+    <div class="rec-controls" id="rec-controls">
+      <button class="btn ghost" id="rec-flip">⟳ Камера</button>
+      <button class="btn danger" id="rec-start">● Запись</button>
+    </div>
+    <div class="rec-controls" id="rec-controls-recording" hidden>
+      <button class="btn" id="rec-stop">Стоп</button>
+    </div>
+    <div class="rec-controls" id="rec-controls-preview" hidden>
+      <button class="btn ghost" id="rec-retake">Ещё раз</button>
+      <button class="btn" id="rec-send">Отправить</button>
+    </div>
+  </div>
+</div>
+
+<div class="rec-overlay" id="playOverlay">
+  <div class="rec-box">
+    <div class="rec-head"><span id="play-who">—</span><button id="play-close" aria-label="Закрыть">✕</button></div>
+    <div class="rec-stage"><video id="play-video" playsinline controls></video></div>
+  </div>
+</div>
+
+<script src="video.js"></script>
 <script src="storage.js"></script>
 <script src="app.js"></script>
 </body>

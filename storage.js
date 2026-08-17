@@ -126,7 +126,46 @@
       return r > l ? remoteState : localState;
     },
 
-    reset: function () { LS.del(LS_STATE); }
+    reset: function () { LS.del(LS_STATE); },
+
+    /* ============================================================
+       Видео — та же облачная функция, но байты идут напрямую
+       браузер → Яндекс.Диск: функция лишь выдаёт временные ссылки
+       на загрузку/скачивание и ведёт общий индекс роликов.
+       ============================================================ */
+    video: {
+      supported: function () {
+        var cfg = Config.read();
+        return cfg.backend === 'cloud' && !!cfg.url;
+      },
+
+      upload: async function (participantId, date, blob, ext) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) {
+          throw new Error('Видео можно отправлять только при включённой облачной синхронизации');
+        }
+        var meta = await api(cfg.url, 'get_upload_url', { participantId: participantId, date: date, ext: ext });
+        var put = await fetch(meta.uploadUrl, { method: 'PUT', body: blob });
+        if (!put.ok) throw new Error('Не удалось загрузить видео на Диск (HTTP ' + put.status + ')');
+        await api(cfg.url, 'confirm_upload', {
+          participantId: participantId, date: date, videoId: meta.videoId, path: meta.path, ext: ext
+        });
+        return true;
+      },
+
+      list: async function () {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) return { items: [], retentionDays: 0 };
+        return api(cfg.url, 'list_videos', {});
+      },
+
+      playUrl: async function (path) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        var d = await api(cfg.url, 'get_download_url', { path: path });
+        return d.url;
+      }
+    }
   };
 
   global.Storage = Storage;

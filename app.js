@@ -31,6 +31,8 @@
   var state = null;
   var cursor = null;      // текущая дата на вкладке «Сегодня»
   var saveTimer = null;
+  var videoIndex = { items: [], retentionDays: 0 };  // кэш ответа list_videos
+  var recSession = null;  // { stream, ctrl, participantId, date, blob, ext }
 
   /* ============================================================
      Даты
@@ -243,6 +245,164 @@
       ? '<div class="empty" style="margin-top:12px;border-color:var(--signal);color:var(--signal)">Челлендж завершён: ' +
         left.map(function (p) { return p.name; }).join(', ') + ' вышел ' + shortDate(left[0].leftAt) + '.</div>'
       : '';
+
+    renderVideos();
+  }
+
+  /* ============================================================
+     Видео дня
+     ============================================================ */
+  function renderVideos() {
+    var host = $('#today-videos');
+    if (!host) return;
+    var date = cursor;
+    var canRecord = Storage.video.supported() && PCVideo.supported();
+
+    if (!Storage.video.supported()) {
+      host.innerHTML = '<div class="empty">Видео работают только при включённой облачной синхронизации — настрой её на вкладке «Настройки».</div>';
+      return;
+    }
+
+    host.innerHTML = state.participants.map(function (p) {
+      var gone = !activeOn(p, date);
+      var clips = videoIndex.items.filter(function (v) { return v.participantId === p.id && v.date === date; });
+      var thumbs = clips.map(function (v) {
+        return '<button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" title="Смотреть">▶</button>';
+      }).join('');
+      var addBtn = (!gone && canRecord)
+        ? '<button class="vid-add" data-rec="' + p.id + '" title="Записать видео">＋</button>'
+        : '';
+      return '<div class="vid-row"><div class="who">' + p.name + '</div><div class="clips">' + thumbs + addBtn + '</div></div>';
+    }).join('');
+
+    if (videoIndex.retentionDays) {
+      host.insertAdjacentHTML('beforeend', '<p class="vid-empty-hint">Видео хранятся ' + videoIndex.retentionDays + ' ' +
+        plural(videoIndex.retentionDays, 'день', 'дня', 'дней') + ', потом удаляются автоматически.</p>');
+    }
+
+    host.querySelectorAll('[data-rec]').forEach(function (b) {
+      b.addEventListener('click', function () { openRecorder(b.dataset.rec); });
+    });
+    host.querySelectorAll('[data-play]').forEach(function (b) {
+      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who); });
+    });
+  }
+
+  function refreshVideoIndex() {
+    if (!Storage.video.supported()) return Promise.resolve();
+    return Storage.video.list().then(function (r) {
+      videoIndex = r || { items: [], retentionDays: 0 };
+      renderVideos();
+    }).catch(function () { /* тихо: список не критичен для остального интерфейса */ });
+  }
+
+  /* ---------- запись ---------- */
+  function openRecorder(participantId) {
+    var p = state.participants.filter(function (x) { return x.id === participantId; })[0];
+    if (!p) return;
+    recSession = { participantId: participantId, date: cursor, facing: 'environment' };
+
+    $('#rec-who').textContent = p.name + ' · ' + shortDate(cursor);
+    $('#rec-msg').textContent = '';
+    $('#rec-live').hidden = false;
+    $('#rec-preview').hidden = true;
+    $('#rec-preview').src = '';
+    $('#rec-timer').hidden = true;
+    $('#rec-controls').hidden = false;
+    $('#rec-controls-recording').hidden = true;
+    $('#rec-controls-preview').hidden = true;
+    $('#rec-start').disabled = true;
+
+    $('#recOverlay').classList.add('on');
+
+    PCVideo.openCamera(recSession.facing).then(function (stream) {
+      recSession.stream = stream;
+      $('#rec-live').srcObject = stream;
+      $('#rec-start').disabled = false;
+    }).catch(function (e) {
+      $('#rec-msg').textContent = 'Нет доступа к камере: ' + e.message;
+    });
+  }
+
+  function closeRecorder() {
+    if (recSession) {
+      if (recSession.ctrl) recSession.ctrl.stop();
+      PCVideo.closeCamera(recSession.stream);
+    }
+    recSession = null;
+    $('#recOverlay').classList.remove('on');
+  }
+
+  function startRecordingUI() {
+    if (!recSession || !recSession.stream) return;
+    $('#rec-controls').hidden = true;
+    $('#rec-controls-recording').hidden = false;
+    $('#rec-timer').hidden = false;
+
+    recSession.ctrl = PCVideo.startRecording(
+      recSession.stream,
+      function (secLeft) { $('#rec-timer').textContent = '00:' + String(secLeft).padStart(2, '0'); },
+      function (blob, ext) {
+        recSession.blob = blob;
+        recSession.ext = ext;
+        $('#rec-live').hidden = true;
+        $('#rec-timer').hidden = true;
+        $('#rec-controls-recording').hidden = true;
+        $('#rec-controls-preview').hidden = false;
+        var preview = $('#rec-preview');
+        preview.hidden = false;
+        preview.src = URL.createObjectURL(blob);
+        var sizeKb = Math.round(blob.size / 1024);
+        $('#rec-msg').textContent = 'Готово, ' + (sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' МБ' : sizeKb + ' КБ') + '.';
+      }
+    );
+  }
+
+  function retakeUI() {
+    var preview = $('#rec-preview');
+    if (preview.src) URL.revokeObjectURL(preview.src);
+    preview.src = '';
+    preview.hidden = true;
+    $('#rec-live').hidden = false;
+    $('#rec-controls-preview').hidden = true;
+    $('#rec-controls').hidden = false;
+    $('#rec-msg').textContent = '';
+  }
+
+  function sendRecordingUI() {
+    if (!recSession || !recSession.blob) return;
+    var s = recSession;
+    $('#rec-controls-preview').hidden = true;
+    $('#rec-msg').textContent = 'Отправляю…';
+    Storage.video.upload(s.participantId, s.date, s.blob, s.ext).then(function () {
+      $('#rec-msg').textContent = 'Отправлено';
+      setTimeout(function () {
+        closeRecorder();
+        refreshVideoIndex();
+      }, 500);
+    }).catch(function (e) {
+      $('#rec-msg').textContent = 'Не отправилось: ' + e.message;
+      $('#rec-controls-preview').hidden = false;
+    });
+  }
+
+  /* ---------- просмотр ---------- */
+  function openPlayer(path, who) {
+    $('#play-who').textContent = who || '—';
+    $('#play-video').src = '';
+    $('#playOverlay').classList.add('on');
+    Storage.video.playUrl(path).then(function (url) {
+      $('#play-video').src = url;
+    }).catch(function (e) {
+      $('#play-who').textContent = (who || '—') + ' — ошибка: ' + e.message;
+    });
+  }
+
+  function closePlayer() {
+    var v = $('#play-video');
+    v.pause();
+    v.src = '';
+    $('#playOverlay').classList.remove('on');
   }
 
   function plural(n, one, few, many) {
@@ -392,6 +552,26 @@
     $('#d-prev').addEventListener('click', function () { cursor = shift(cursor, -1); renderToday(); });
     $('#d-next').addEventListener('click', function () { if (cursor < today()) { cursor = shift(cursor, 1); renderToday(); } });
 
+    $('#rec-close').addEventListener('click', closeRecorder);
+    $('#rec-start').addEventListener('click', startRecordingUI);
+    $('#rec-stop').addEventListener('click', function () { if (recSession && recSession.ctrl) recSession.ctrl.stop(); });
+    $('#rec-retake').addEventListener('click', retakeUI);
+    $('#rec-send').addEventListener('click', sendRecordingUI);
+    $('#rec-flip').addEventListener('click', function () {
+      if (!recSession) return;
+      var next = recSession.facing === 'user' ? 'environment' : 'user';
+      PCVideo.closeCamera(recSession.stream);
+      recSession.facing = next;
+      $('#rec-start').disabled = true;
+      PCVideo.openCamera(next).then(function (stream) {
+        recSession.stream = stream;
+        $('#rec-live').srcObject = stream;
+        $('#rec-start').disabled = false;
+      }).catch(function (e) { $('#rec-msg').textContent = 'Нет доступа к камере: ' + e.message; });
+    });
+
+    $('#play-close').addEventListener('click', closePlayer);
+
     $('#cfg-backend').addEventListener('change', function () {
       $('#cfg-cloud').hidden = this.value !== 'cloud';
     });
@@ -405,7 +585,7 @@
       if (cfg.backend !== 'cloud') { setCfgStatus('Данные хранятся на этом устройстве', 'ok'); return; }
       setCfgStatus('Проверяю связь с функцией…');
       Storage.check(cfg)
-        .then(function () { setCfgStatus('Функция отвечает, всё в порядке', 'ok'); })
+        .then(function () { setCfgStatus('Функция отвечает, всё в порядке', 'ok'); refreshVideoIndex(); })
         .catch(function (e) { setCfgStatus(e.message, 'err'); });
     });
 
@@ -482,6 +662,7 @@
       if (document.hidden) return;
       if (cursor > today()) cursor = today();
       render();
+      refreshVideoIndex();
       Storage.pull().then(function (remote) {
         if (!remote) return;
         var merged = normalize(Storage.merge(state, remote));
@@ -494,6 +675,7 @@
       state = normalize(Storage.merge(state, remote));
       render();
     }).catch(function () {});
+    refreshVideoIndex();
 
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {
