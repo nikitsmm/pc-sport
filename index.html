@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ПЦ Спорт</title>
+<meta name="theme-color" content="#10171E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ПЦ Спорт">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="appbar">
+  <div class="brand">ПЦ Спорт</div>
+  <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
+</header>
+
+<main class="wrap">
+
+  <!-- ================= СЕГОДНЯ ================= -->
+  <section class="view on" id="v-today">
+    <div class="datebar">
+      <button id="d-prev" aria-label="Предыдущий день">‹</button>
+      <div class="d" id="d-label">—</div>
+      <button id="d-next" aria-label="Следующий день">›</button>
+    </div>
+    <div id="today-cards"></div>
+    <div id="today-banner"></div>
+  </section>
+
+  <!-- ================= ЖУРНАЛ ================= -->
+  <section class="view" id="v-log">
+    <h2>Журнал — 21 день</h2>
+    <div class="grid">
+      <table class="log" id="log-table"></table>
+    </div>
+    <p class="status-line">Нажатие на клетку переключает статус: пусто → норма → альтернатива → форс-мажор → пропуск.</p>
+  </section>
+
+  <!-- ================= СЧЁТ ================= -->
+  <section class="view" id="v-money">
+    <h2>Счёт</h2>
+    <div class="ledger" id="ledger"></div>
+    <div class="total" id="ledger-total"><span>Всего штрафов</span><b>0 ₽</b></div>
+    <h2 style="margin-top:22px">История штрафов</h2>
+    <div id="fines-list"></div>
+  </section>
+
+  <!-- ================= ПРАВИЛА ================= -->
+  <section class="view" id="v-rules">
+    <h2>Редакция от 17.08.2026</h2>
+    <div class="doc">
+      <h3>Основное</h3>
+      <p>Каждый день выполняешь свой комплекс и до <b>23:59:59</b> выкладываешь видео-подтверждение в чат «ПЦ Спорт».</p>
+
+      <h3>Нормы</h3>
+      <ul>
+        <li><b>Коля</b> — 60 подтягиваний / 70 отжиманий, день через день.</li>
+        <li><b>Ваня</b> — 50 подтягиваний / 60 отжиманий, день через день.</li>
+        <li><b>Артур</b> — 50 отжиманий каждый день.</li>
+        <li><b>Антон</b> — 40 отжиманий каждый день.</li>
+      </ul>
+
+      <h3>Альтернативы</h3>
+      <p>Не чаще 2 раз в неделю вместо основного задания:</p>
+      <ul>
+        <li>150 приседаний.</li>
+        <li>Подъём гантелей на плечи (вес от 12 кг) — минимум 50 повторений на каждую руку.</li>
+        <li>Жим гири или штанги от плеча вверх (вес от 12 кг) — минимум 50 повторений на каждую руку.</li>
+        <li>Подъём гири или штанги перед собой любым способом — минимум 50 повторений.</li>
+        <li>Пресс — скручивания или подъём ног на брусьях/турнике — минимум 50 повторений.</li>
+      </ul>
+      <p class="note">Гиря и штанга равнозначны — снаряд выбираешь сам, требование только к весу. Видео с альтернативой отправляется в чат на общих основаниях.</p>
+
+      <h3>Форс-мажор и отработка</h3>
+      <p>Форс-мажор признаётся <b>только голосованием участников чата</b>. Если пропуск признан уважительным, штрафа нет, но на следующий день норма умножается:</p>
+      <div class="ladder">
+        <div><div class="x">×2</div><div class="l">после 1 дня</div></div>
+        <div><div class="x">×3</div><div class="l">после 2 дней подряд</div></div>
+        <div><div class="x">×4</div><div class="l">после 3 дней подряд</div></div>
+      </div>
+      <p>Тяжёлые обстоятельства — смерть близких, серьёзная болезнь с госпитализацией, переломы. Всё остальное по умолчанию форс-мажором не является.</p>
+
+      <h3>Штрафы</h3>
+      <ul>
+        <li>Пропуск дня без уважительной причины — <b>5000 ₽</b>.</li>
+        <li>Добровольный выход из челленджа — <b>5000 ₽</b>.</li>
+        <li>После первого выбывшего челлендж завершается.</li>
+      </ul>
+      <p class="note">Штраф не идёт в общую казну — он делится поровну между остальными участниками, которые участвуют в челлендже на день штрафа.</p>
+
+      <h3>Технические сбои</h3>
+      <p>Если видео не загрузилось по техническим причинам, остальные голосованием решают, верить ли участнику. Если большинство считает, что упражнение не выполнено — штраф 5000 ₽.</p>
+
+      <h3>Осталось договориться</h3>
+      <ul>
+        <li>Что делать после 4-го пропуска подряд: ×5 или всё-таки штраф.</li>
+        <li>Можно ли закрывать отработку альтернативным упражнением.</li>
+        <li>Сколько дней даётся на отработку при длинном форс-мажоре.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ================= НАСТРОЙКИ ================= -->
+  <section class="view" id="v-cfg">
+    <h2>Синхронизация</h2>
+    <div class="panel">
+      <label for="cfg-backend">Где хранятся данные</label>
+      <select id="cfg-backend">
+        <option value="local">Только на этом устройстве</option>
+        <option value="cloud">Общее состояние через облачную функцию</option>
+      </select>
+
+      <div id="cfg-cloud" hidden>
+        <label for="cfg-url">URL облачной функции</label>
+        <input id="cfg-url" type="text" autocomplete="off" placeholder="https://functions.yandexcloud.net/…">
+        <p class="h">Токен Яндекс.Диска в приложении не участвует — он живёт только внутри самой функции (см. backend/index.py и переменную окружения YADISK_TOKEN). У всех участников должен быть один и тот же URL.</p>
+      </div>
+
+      <div class="row" style="margin-top:16px;flex-wrap:wrap;gap:8px">
+        <button class="btn" id="cfg-save">Сохранить</button>
+        <button class="btn ghost" id="cfg-pull">Загрузить</button>
+        <button class="btn ghost" id="cfg-push">Выгрузить</button>
+      </div>
+      <div class="status-line" id="cfg-status"></div>
+    </div>
+
+    <h2>Участники и нормы</h2>
+    <div class="panel" id="cfg-people"></div>
+
+    <h2>Отсчёт чередования</h2>
+    <div class="panel">
+      <label for="cfg-anchor">В этот день чередующиеся делают подтягивания</label>
+      <input id="cfg-anchor" type="date">
+      <p class="h">Дальше подтягивания и отжимания идут через день от этой даты.</p>
+    </div>
+
+    <h2>Данные</h2>
+    <div class="panel">
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+        <button class="btn ghost" id="cfg-export">Выгрузить JSON</button>
+        <button class="btn ghost" id="cfg-import">Загрузить JSON</button>
+        <button class="btn danger" id="cfg-reset">Сбросить всё</button>
+      </div>
+      <input id="cfg-file" type="file" accept="application/json,.json" hidden>
+      <p class="h" id="cfg-version">—</p>
+    </div>
+  </section>
+
+</main>
+
+<nav class="tabs" id="tabs">
+  <button data-view="today" class="on"><span class="g">▣</span>Сегодня</button>
+  <button data-view="log"><span class="g">▤</span>Журнал</button>
+  <button data-view="money"><span class="g">₽</span>Счёт</button>
+  <button data-view="rules"><span class="g">§</span>Правила</button>
+  <button data-view="cfg"><span class="g">⚙</span>Настройки</button>
+</nav>
+
+<script src="storage.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
