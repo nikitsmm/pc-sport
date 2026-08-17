@@ -293,6 +293,9 @@
     return Storage.video.list().then(function (r) {
       videoIndex = r || { items: [], retentionDays: 0 };
       renderVideos();
+      if (r && r.healed) {
+        setCfgStatus('Досчитал ' + r.healed + ' ' + plural(r.healed, 'пропущенное видео', 'пропущенных видео', 'пропущенных видео') + ' с Диска', 'ok');
+      }
     }).catch(function () { /* тихо: список не критичен для остального интерфейса */ });
   }
 
@@ -426,30 +429,45 @@
     var s = recSession;
     $('#rec-controls-preview').hidden = true;
     $('#rec-msg').textContent = 'Отправляю… 0%';
-    Storage.video.upload(s.participantId, s.date, s.blob, s.ext, function (frac) {
-      $('#rec-msg').textContent = 'Отправляю… ' + Math.round(frac * 100) + '%';
-    }).then(function () {
-      $('#rec-msg').textContent = 'Отправлено';
+
+    var slowHint = setTimeout(function () {
+      $('#rec-msg').textContent += ' (Яндекс.Диску иногда нужно чуть больше времени на обработку — это ещё не зависание)';
+    }, 20000);
+
+    Storage.video.upload(
+      s.participantId, s.date, s.blob, s.ext,
+      function (frac) { $('#rec-msg').textContent = 'Отправляю… ' + Math.round(frac * 100) + '%'; },
+      function (phase) { $('#rec-msg').textContent = phase; }
+    ).then(function (r) {
+      clearTimeout(slowHint);
+      $('#rec-msg').textContent = r.confirmed
+        ? 'Отправлено'
+        : 'Файл на Диске, но подтверждение задержалось — появится в списке само';
       setTimeout(function () {
         closeRecorder();
         refreshVideoIndex();
-      }, 500);
+      }, r.confirmed ? 500 : 1500);
     }).catch(function (e) {
+      clearTimeout(slowHint);
       $('#rec-msg').textContent = 'Не отправилось: ' + e.message;
       $('#rec-controls-preview').hidden = false;
     });
   }
 
   /* ---------- просмотр ---------- */
+  var currentBlobUrl = null;
+
   function openPlayer(path, who) {
     $('#play-who').textContent = who || '—';
     $('#play-video').src = '';
     $('#play-msg').textContent = 'Загружаю…';
     $('#play-fallback').href = '#';
     $('#playOverlay').classList.add('on');
-    Storage.video.playUrl(path).then(function (url) {
-      $('#play-video').src = url;
-      $('#play-fallback').href = url;
+    Storage.video.playUrl(path).then(function (r) {
+      if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
+      if (r.isBlob) currentBlobUrl = r.url;
+      $('#play-video').src = r.url;
+      $('#play-fallback').href = r.url;
       $('#play-msg').textContent = '';
     }).catch(function (e) {
       $('#play-msg').textContent = 'Ошибка: ' + e.message;
@@ -460,6 +478,7 @@
     var v = $('#play-video');
     v.pause();
     v.src = '';
+    if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
     $('#play-msg').textContent = '';
     $('#playOverlay').classList.remove('on');
   }
@@ -712,6 +731,22 @@
       state = normalize(null);
       commit();
       setCfgStatus('Сброшено', 'ok');
+    });
+
+    $('#cfg-sync-video').addEventListener('click', function () {
+      var el = $('#cfg-video-status');
+      el.className = 'status-line';
+      el.textContent = 'Проверяю…';
+      Storage.video.sync().then(function (r) {
+        el.className = 'status-line ok';
+        el.textContent = r.added
+          ? 'Досчитал ' + r.added + ' ' + plural(r.added, 'видео', 'видео', 'видео') + ' с Диска'
+          : 'Всё совпадает, расхождений нет';
+        refreshVideoIndex();
+      }).catch(function (e) {
+        el.className = 'status-line err';
+        el.textContent = e.message;
+      });
     });
   }
 

@@ -19,7 +19,7 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v8 · 17.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v11 · 17.08.2026</span></div>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
 </header>
 
@@ -143,6 +143,15 @@
       <label for="cfg-anchor">В этот день чередующиеся делают подтягивания</label>
       <input id="cfg-anchor" type="date">
       <p class="h">Дальше подтягивания и отжимания идут через день от этой даты.</p>
+    </div>
+
+    <h2>Видео</h2>
+    <div class="panel">
+      <p class="h">Список видео на вкладке «Сегодня» и так сверяется с Диском при каждом открытии — эта кнопка нужна, только если хочешь проверить прямо сейчас, ничего не дожидаясь.</p>
+      <div class="row" style="margin-top:12px">
+        <button class="btn ghost" id="cfg-sync-video" style="flex:1">Проверить видео на Диске</button>
+      </div>
+      <div class="status-line" id="cfg-video-status"></div>
     </div>
 
     <h2>Данные</h2>

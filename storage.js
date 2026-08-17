@@ -75,6 +75,21 @@
     return data;
   }
 
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  /* Файл на Диск уже уехал к этому моменту — если сама запись в общий
+     индекс (confirm_upload) споткнётся о кратковременный сбой сети,
+     видео физически есть, но в приложении не появится. Несколько
+     попыток с паузой закрывают почти все такие случаи. */
+  async function apiRetry(url, action, params, attempts) {
+    var lastErr;
+    for (var i = 0; i < attempts; i++) {
+      try { return await api(url, action, params); }
+      catch (e) { lastErr = e; if (i < attempts - 1) await wait(800 * (i + 1)); }
+    }
+    throw lastErr;
+  }
+
   /* ============================================================
      Публичный интерфейс — сигнатуры прежние, чтобы app.js не менять
      ============================================================ */
@@ -139,10 +154,18 @@
         return cfg.backend === 'cloud' && !!cfg.url;
       },
 
-      /* onProgress(fraction 0..1) — вызывается по ходу отправки. Без
-         этого крупный файл из галереи грузится по 5-10 минут молча и
-         выглядит зависшим, хотя просто медленно льётся по сети. */
-      upload: async function (participantId, date, blob, ext, onProgress) {
+      /* onProgress(fraction 0..1) — по ходу отправки байт.
+         onPhase(text) — смена фазы (отправка → ждём ответ сервера →
+         записываем в индекс).
+
+         Возвращает { confirmed: bool }. Если PUT не прошёл — это
+         настоящая ошибка (throw), файл не ушёл никуда. Если PUT прошёл,
+         а confirm_upload после трёх попыток так и не подтвердился —
+         это НЕ потеря: файл уже физически на Диске, просто запись о нём
+         в общий список подтянется сама при следующем открытии «Видео
+         дня» (list_videos сверяется с реальным содержимым Диска). Ошибку
+         в этом случае не бросаем, чтобы не выглядело как «не отправилось». */
+      upload: async function (participantId, date, blob, ext, onProgress, onPhase) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) {
           throw new Error('Видео можно отправлять только при включённой облачной синхронизации');
@@ -154,6 +177,7 @@
           xhr.open('PUT', meta.uploadUrl, true);
           xhr.upload.onprogress = function (e) {
             if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total);
+            if (e.lengthComputable && e.loaded >= e.total && onPhase) onPhase('Файл отправлен, жду подтверждения от Диска…');
           };
           xhr.onload = function () {
             if (xhr.status >= 200 && xhr.status < 300) resolve();
@@ -163,10 +187,15 @@
           xhr.send(blob);
         });
 
-        await api(cfg.url, 'confirm_upload', {
-          participantId: participantId, date: date, videoId: meta.videoId, path: meta.path, ext: ext
-        });
-        return true;
+        if (onPhase) onPhase('Записываю в общий список видео…');
+        try {
+          await apiRetry(cfg.url, 'confirm_upload', {
+            participantId: participantId, date: date, videoId: meta.videoId, path: meta.path, ext: ext, size: blob.size
+          }, 3);
+          return { confirmed: true };
+        } catch (e) {
+          return { confirmed: false };
+        }
       },
 
       list: async function () {
@@ -175,11 +204,35 @@
         return api(cfg.url, 'list_videos', {});
       },
 
+      /* Полная сверка индекса со всем содержимым папки videos/ на Диске,
+         без ограничения окном хранения — для кнопки в настройках, когда
+         хочется убедиться прямо сейчас, что ничего не потерялось. */
+      sync: async function () {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        return api(cfg.url, 'sync_videos', {});
+      },
+
+      /* Возвращает { url, isBlob }. Для небольших роликов байты
+         забираются через саму функцию и заворачиваются в blob: URL —
+         это работает надёжно (без Range-запросов, disposition и прочих
+         капризов временных ссылок Диска, на которых уже дважды
+         спотыкались). Для крупных файлов — прямая ссылка на Диск как
+         запасной вариант. */
       playUrl: async function (path) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
-        var d = await api(cfg.url, 'get_download_url', { path: path });
-        return d.url;
+        try {
+          var d = await api(cfg.url, 'get_video_bytes', { path: path });
+          var bin = atob(d.data);
+          var bytes = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          var blob = new Blob([bytes], { type: d.contentType || 'video/mp4' });
+          return { url: URL.createObjectURL(blob), isBlob: true };
+        } catch (e) {
+          var d2 = await api(cfg.url, 'get_download_url', { path: path });
+          return { url: d2.url, isBlob: false };
+        }
       }
     }
   };
