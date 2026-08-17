@@ -300,7 +300,7 @@
   function openRecorder(participantId) {
     var p = state.participants.filter(function (x) { return x.id === participantId; })[0];
     if (!p) return;
-    recSession = { participantId: participantId, date: cursor, facing: 'environment' };
+    recSession = { participantId: participantId, date: cursor, facing: 'environment', recording: false };
 
     $('#rec-who').textContent = p.name + ' · ' + shortDate(cursor);
     $('#rec-msg').textContent = '';
@@ -308,19 +308,22 @@
     $('#rec-preview').hidden = true;
     $('#rec-preview').src = '';
     $('#rec-timer').hidden = true;
-    $('#rec-controls').hidden = false;
-    $('#rec-controls-recording').hidden = true;
+    $('#rec-live-controls').hidden = false;
     $('#rec-controls-preview').hidden = true;
-    $('#rec-start').disabled = true;
+    setToggleIdle();
+    $('#rec-toggle').disabled = true;
+    $('#rec-flip').disabled = true;
+    $('#rec-gallery').disabled = false;
 
     $('#recOverlay').classList.add('on');
 
     PCVideo.openCamera(recSession.facing).then(function (stream) {
       recSession.stream = stream;
       $('#rec-live').srcObject = stream;
-      $('#rec-start').disabled = false;
+      $('#rec-toggle').disabled = false;
+      $('#rec-flip').disabled = false;
     }).catch(function (e) {
-      $('#rec-msg').textContent = 'Нет доступа к камере: ' + e.message;
+      $('#rec-msg').textContent = 'Нет доступа к камере: ' + e.message + ' Можно взять готовое видео из галереи.';
     });
   }
 
@@ -333,36 +336,52 @@
     $('#recOverlay').classList.remove('on');
   }
 
-  function startRecordingUI() {
+  function setToggleIdle() {
+    var b = $('#rec-toggle');
+    b.textContent = '● Запись';
+    b.classList.remove('active');
+  }
+
+  function toggleRecordingUI() {
     if (!recSession || !recSession.stream) return;
-    $('#rec-controls').hidden = true;
-    $('#rec-controls-recording').hidden = false;
+    if (recSession.recording) {
+      if (recSession.ctrl) recSession.ctrl.stop();
+      return;
+    }
+    recSession.recording = true;
+    $('#rec-toggle').classList.add('active');
+    $('#rec-flip').disabled = true;
+    $('#rec-gallery').disabled = true;
     $('#rec-timer').hidden = false;
 
     recSession.ctrl = PCVideo.startRecording(
       recSession.stream,
       function (secLeft) { $('#rec-timer').textContent = '00:' + String(secLeft).padStart(2, '0'); },
       function (blob, ext) {
+        recSession.recording = false;
         $('#rec-live').hidden = true;
         $('#rec-timer').hidden = true;
-        $('#rec-controls-recording').hidden = true;
+        setToggleIdle();
         showRecordedPreview(blob, ext);
       }
     );
   }
 
-  /* Общий финиш и для живой записи, и для перекодированного файла из
-     галереи — дальше человек видит один и тот же предпросмотр с
-     кнопками «Ещё раз» / «Отправить», не важно, откуда взялся ролик. */
+  /* Общий финиш и для живой записи, и для файла из галереи — дальше
+     человек видит один и тот же предпросмотр с кнопками
+     «Ещё раз» / «Отправить», не важно, откуда взялся ролик. */
   function showRecordedPreview(blob, ext) {
     recSession.blob = blob;
     recSession.ext = ext;
+    $('#rec-live-controls').hidden = true;
     $('#rec-controls-preview').hidden = false;
     var preview = $('#rec-preview');
     preview.hidden = false;
     preview.src = URL.createObjectURL(blob);
     var sizeKb = Math.round(blob.size / 1024);
-    $('#rec-msg').textContent = 'Готово, ' + (sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' МБ' : sizeKb + ' КБ') + '.';
+    var sizeStr = sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' МБ' : sizeKb + ' КБ';
+    var warn = sizeKb > 15 * 1024 ? ' Файл тяжёлый — загрузка может занять время.' : '';
+    $('#rec-msg').textContent = 'Готово, ' + sizeStr + '.' + warn;
   }
 
   function openGalleryPicker() {
@@ -370,28 +389,23 @@
     $('#rec-file').click();
   }
 
+  /* Видео из галереи заливается как есть, без пересборки — так надёжнее.
+     Гарантия маленького размера — только у записи прямо в приложении. */
+  function extForMime(mime) {
+    if (!mime) return 'mp4';
+    if (mime.indexOf('quicktime') !== -1) return 'mov';
+    if (mime.indexOf('webm') !== -1) return 'webm';
+    return 'mp4';
+  }
+
   function handleGalleryFile(file) {
     if (!file || !recSession) return;
+    if (!file.type || file.type.indexOf('video') !== 0) {
+      $('#rec-msg').textContent = 'Выбранный файл — не видео.';
+      return;
+    }
     $('#rec-live').hidden = true;
-    $('#rec-controls').hidden = true;
-    $('#rec-timer').hidden = false;
-    $('#rec-timer').textContent = 'обработка…';
-    $('#rec-msg').textContent = 'Сжимаю видео из галереи — это может занять несколько секунд.';
-
-    PCVideo.compressFile(
-      file,
-      function (secLeft) { $('#rec-timer').textContent = 'ещё ~' + secLeft + ' с'; },
-      function (blob, ext) {
-        $('#rec-timer').hidden = true;
-        showRecordedPreview(blob, ext);
-      },
-      function (err) {
-        $('#rec-timer').hidden = true;
-        $('#rec-controls').hidden = false;
-        $('#rec-live').hidden = false;
-        $('#rec-msg').textContent = 'Не получилось обработать: ' + err.message;
-      }
-    );
+    showRecordedPreview(file, extForMime(file.type));
   }
 
   function retakeUI() {
@@ -401,7 +415,9 @@
     preview.hidden = true;
     $('#rec-live').hidden = false;
     $('#rec-controls-preview').hidden = true;
-    $('#rec-controls').hidden = false;
+    $('#rec-live-controls').hidden = false;
+    $('#rec-flip').disabled = false;
+    $('#rec-gallery').disabled = false;
     $('#rec-msg').textContent = '';
   }
 
@@ -589,8 +605,7 @@
     $('#d-next').addEventListener('click', function () { if (cursor < today()) { cursor = shift(cursor, 1); renderToday(); } });
 
     $('#rec-close').addEventListener('click', closeRecorder);
-    $('#rec-start').addEventListener('click', startRecordingUI);
-    $('#rec-stop').addEventListener('click', function () { if (recSession && recSession.ctrl) recSession.ctrl.stop(); });
+    $('#rec-toggle').addEventListener('click', toggleRecordingUI);
     $('#rec-retake').addEventListener('click', retakeUI);
     $('#rec-send').addEventListener('click', sendRecordingUI);
     $('#rec-gallery').addEventListener('click', openGalleryPicker);
@@ -600,15 +615,15 @@
       handleGalleryFile(f);
     });
     $('#rec-flip').addEventListener('click', function () {
-      if (!recSession) return;
+      if (!recSession || recSession.recording) return;
       var next = recSession.facing === 'user' ? 'environment' : 'user';
       PCVideo.closeCamera(recSession.stream);
       recSession.facing = next;
-      $('#rec-start').disabled = true;
+      $('#rec-toggle').disabled = true;
       PCVideo.openCamera(next).then(function (stream) {
         recSession.stream = stream;
         $('#rec-live').srcObject = stream;
-        $('#rec-start').disabled = false;
+        $('#rec-toggle').disabled = false;
       }).catch(function (e) { $('#rec-msg').textContent = 'Нет доступа к камере: ' + e.message; });
     });
 
