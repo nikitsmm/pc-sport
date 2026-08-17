@@ -25,10 +25,17 @@
 
   function pickMimeType() {
     if (!global.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+    /* mp4/H.264 сначала: играет надёжно везде — в Safari, в приложении
+       "Фото" на iPhone, в VLC, на Windows, в любом браузере. webm с
+       некоторых устройств формально ЗАПИСЫВАЕТСЯ (isTypeSupported даёт
+       true), но воспроизведение такого файла за пределами Chrome/Firefox
+       — уже не гарантия, особенно на iOS. Берём webm только если mp4
+       совсем не поддерживается на запись. */
     var candidates = [
+      'video/mp4;codecs=avc1,mp4a',
+      'video/mp4',
       'video/webm;codecs=vp8,opus',
-      'video/webm',
-      'video/mp4' // Safari — единственное, что она реально пишет
+      'video/webm'
     ];
     for (var i = 0; i < candidates.length; i++) {
       if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
