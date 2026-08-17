@@ -231,7 +231,7 @@
           return { url: URL.createObjectURL(blob), isBlob: true };
         } catch (e) {
           var d2 = await api(cfg.url, 'get_download_url', { path: path });
-          return { url: d2.url, isBlob: false };
+          return { url: d2.url, isBlob: false, fallbackReason: e.message };
         }
       }
     }

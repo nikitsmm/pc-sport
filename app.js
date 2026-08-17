@@ -468,7 +468,7 @@
       if (r.isBlob) currentBlobUrl = r.url;
       $('#play-video').src = r.url;
       $('#play-fallback').href = r.url;
-      $('#play-msg').textContent = '';
+      $('#play-msg').textContent = r.isBlob ? '' : ('Надёжный способ не сработал (' + r.fallbackReason + ') — играю через прямую ссылку Диска.');
     }).catch(function (e) {
       $('#play-msg').textContent = 'Ошибка: ' + e.message;
     });
