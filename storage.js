@@ -139,14 +139,30 @@
         return cfg.backend === 'cloud' && !!cfg.url;
       },
 
-      upload: async function (participantId, date, blob, ext) {
+      /* onProgress(fraction 0..1) — вызывается по ходу отправки. Без
+         этого крупный файл из галереи грузится по 5-10 минут молча и
+         выглядит зависшим, хотя просто медленно льётся по сети. */
+      upload: async function (participantId, date, blob, ext, onProgress) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) {
           throw new Error('Видео можно отправлять только при включённой облачной синхронизации');
         }
         var meta = await api(cfg.url, 'get_upload_url', { participantId: participantId, date: date, ext: ext });
-        var put = await fetch(meta.uploadUrl, { method: 'PUT', body: blob });
-        if (!put.ok) throw new Error('Не удалось загрузить видео на Диск (HTTP ' + put.status + ')');
+
+        await new Promise(function (resolve, reject) {
+          var xhr = new XMLHttpRequest();
+          xhr.open('PUT', meta.uploadUrl, true);
+          xhr.upload.onprogress = function (e) {
+            if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total);
+          };
+          xhr.onload = function () {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error('Не удалось загрузить видео на Диск (HTTP ' + xhr.status + ')'));
+          };
+          xhr.onerror = function () { reject(new Error('Сеть прервалась во время загрузки видео')); };
+          xhr.send(blob);
+        });
+
         await api(cfg.url, 'confirm_upload', {
           participantId: participantId, date: date, videoId: meta.videoId, path: meta.path, ext: ext
         });

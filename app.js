@@ -425,8 +425,10 @@
     if (!recSession || !recSession.blob) return;
     var s = recSession;
     $('#rec-controls-preview').hidden = true;
-    $('#rec-msg').textContent = 'Отправляю…';
-    Storage.video.upload(s.participantId, s.date, s.blob, s.ext).then(function () {
+    $('#rec-msg').textContent = 'Отправляю… 0%';
+    Storage.video.upload(s.participantId, s.date, s.blob, s.ext, function (frac) {
+      $('#rec-msg').textContent = 'Отправляю… ' + Math.round(frac * 100) + '%';
+    }).then(function () {
       $('#rec-msg').textContent = 'Отправлено';
       setTimeout(function () {
         closeRecorder();
@@ -442,11 +444,15 @@
   function openPlayer(path, who) {
     $('#play-who').textContent = who || '—';
     $('#play-video').src = '';
+    $('#play-msg').textContent = 'Загружаю…';
+    $('#play-fallback').href = '#';
     $('#playOverlay').classList.add('on');
     Storage.video.playUrl(path).then(function (url) {
       $('#play-video').src = url;
+      $('#play-fallback').href = url;
+      $('#play-msg').textContent = '';
     }).catch(function (e) {
-      $('#play-who').textContent = (who || '—') + ' — ошибка: ' + e.message;
+      $('#play-msg').textContent = 'Ошибка: ' + e.message;
     });
   }
 
@@ -454,6 +460,7 @@
     var v = $('#play-video');
     v.pause();
     v.src = '';
+    $('#play-msg').textContent = '';
     $('#playOverlay').classList.remove('on');
   }
 
@@ -628,6 +635,11 @@
     });
 
     $('#play-close').addEventListener('click', closePlayer);
+    $('#play-video').addEventListener('error', function () {
+      var v = $('#play-video');
+      var code = v.error ? v.error.code : 0;
+      $('#play-msg').textContent = 'Не проигралось внутри приложения (код ' + code + ') — попробуй «Открыть ссылкой».';
+    });
 
     $('#cfg-backend').addEventListener('change', function () {
       $('#cfg-cloud').hidden = this.value !== 'cloud';

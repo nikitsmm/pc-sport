@@ -19,7 +19,7 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v6 · 17.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v7 · 17.08.2026</span></div>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
 </header>
 
@@ -196,6 +196,10 @@
   <div class="rec-box">
     <div class="rec-head"><span id="play-who">—</span><button id="play-close" aria-label="Закрыть">✕</button></div>
     <div class="rec-stage"><video id="play-video" playsinline controls></video></div>
+    <div class="rec-msg" id="play-msg"></div>
+    <div class="rec-controls">
+      <a class="btn cam" id="play-fallback" href="#" target="_blank" rel="noopener">Открыть ссылкой</a>
+    </div>
   </div>
 </div>
 
