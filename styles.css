@@ -37,6 +37,8 @@ h2{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:11.5px;fo
 }
 .appbar .brand{font-family:"Unbounded","IBM Plex Sans",sans-serif;font-weight:800;
   font-size:15px;letter-spacing:.02em;text-transform:uppercase;}
+.appbar .ver{font-family:"JetBrains Mono",monospace;font-weight:400;font-size:9px;letter-spacing:0;
+  text-transform:none;color:#5A6B7A;margin-left:6px;white-space:nowrap;}
 .appbar .clock{font-family:"JetBrains Mono",monospace;font-size:12px;color:#9FB0BE;text-align:right;line-height:1.25;}
 .appbar .clock b{display:block;color:#fff;font-size:15px;font-weight:700;}
 .appbar .clock.late b{color:#FF8A80;}
