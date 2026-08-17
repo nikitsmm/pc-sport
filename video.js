@@ -1,111 +1,51 @@
-/* ============================================================
-   video.js — запись видео прямо в браузере, маленького размера.
+/* ПЦ Спорт — service worker.
+   Оболочка приложения кешируется, запросы к API Яндекса идут только по сети. */
 
-   Идея: не звать системную камеру iPhone (это сразу 50–200 МБ на
-   30 секунд, 4K/HDR), а писать через getUserMedia + MediaRecorder
-   с явно урезанным разрешением и битрейтом. На выходе — 2–5 МБ на
-   ролик той же длины.
+var CACHE = 'pcsport-v3';
+var SHELL = [
+  './',
+  'index.html',
+  'styles.css',
+  'app.js',
+  'storage.js',
+  'video.js',
+  'manifest.webmanifest',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
+  'icons/apple-touch-icon.png'
+];
 
-   ВАЖНО про Safari/iOS: если не задать videoBitsPerSecond явно,
-   Safari сама возьмёт битрейт по умолчанию 10 Мбит/с (это ВЫШЕ, чем
-   у Chrome/Firefox — 2.5 Мбит/с) — то есть именно на iPhone видео
-   получится самым тяжёлым из всех платформ, если это не задать.
-   Указанный битрейт браузеры (включая iOS Safari) соблюдают в
-   пределах 10–15%, так что этим рычагом можно реально управлять
-   размером файла.
-   ============================================================ */
+self.addEventListener('install', function (e) {
+  e.waitUntil(
+    caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).then(function () { return self.skipWaiting(); })
+  );
+});
 
-(function (global) {
-  'use strict';
+self.addEventListener('activate', function (e) {
+  e.waitUntil(
+    caches.keys().then(function (keys) {
+      return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+    }).then(function () { return self.clients.claim(); })
+  );
+});
 
-  var MAX_SECONDS = 35;       // жёсткий потолок длительности ролика
-  var TARGET_BITRATE = 700000; // ~700 кбит/с — для 35 сек это ~3 МБ
-  var TARGET_WIDTH = 480;
-  var TARGET_HEIGHT = 640;
+self.addEventListener('fetch', function (e) {
+  var url = new URL(e.request.url);
 
-  function pickMimeType() {
-    if (!global.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
-    var candidates = [
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-      'video/mp4' // Safari — единственное, что она реально пишет
-    ];
-    for (var i = 0; i < candidates.length; i++) {
-      if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
-    }
-    return '';
-  }
+  if (e.request.method !== 'GET') return;
+  if (url.hostname.indexOf('yandex.net') !== -1 || url.hostname.indexOf('yandex.ru') !== -1) return;
 
-  function extFor(mime) {
-    return mime.indexOf('mp4') !== -1 ? 'mp4' : 'webm';
-  }
-
-  var Video = {
-    supported: function () {
-      return !!(global.navigator && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && global.MediaRecorder);
-    },
-
-    /* Открыть камеру. facing: 'user' (фронтальная) | 'environment' (основная). */
-    openCamera: function (facing) {
-      var constraints = {
-        audio: true,
-        video: {
-          facingMode: facing || 'environment',
-          width: { ideal: TARGET_WIDTH },
-          height: { ideal: TARGET_HEIGHT },
-          frameRate: { ideal: 24, max: 30 }
+  /* шрифты и оболочка: сначала кеш, потом сеть */
+  e.respondWith(
+    caches.match(e.request).then(function (hit) {
+      if (hit) return hit;
+      return fetch(e.request).then(function (res) {
+        if (res && res.status === 200 && (url.origin === location.origin || url.hostname.indexOf('gstatic') !== -1 || url.hostname.indexOf('googleapis') !== -1)) {
+          var copy = res.clone();
+          caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
         }
-      };
-      return navigator.mediaDevices.getUserMedia(constraints);
-    },
-
-    closeCamera: function (stream) {
-      if (!stream) return;
-      stream.getTracks().forEach(function (t) { t.stop(); });
-    },
-
-    /* Начать запись. onTick(secondsLeft) — раз в секунду, для таймера в UI.
-       onDone(blob, ext) — когда запись остановлена (вручную или по лимиту). */
-    startRecording: function (stream, onTick, onDone) {
-      var mime = pickMimeType();
-      if (!mime) throw new Error('Браузер не умеет записывать видео (нет MediaRecorder)');
-
-      var opts = { mimeType: mime, videoBitsPerSecond: TARGET_BITRATE };
-      var rec;
-      try {
-        rec = new MediaRecorder(stream, opts);
-      } catch (e) {
-        rec = new MediaRecorder(stream, { mimeType: mime }); // на случай если браузер капризничает на опциях
-      }
-
-      var chunks = [];
-      rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
-      rec.onstop = function () {
-        clearInterval(tickTimer);
-        clearTimeout(hardStop);
-        var blob = new Blob(chunks, { type: mime });
-        onDone(blob, extFor(mime));
-      };
-
-      rec.start();
-
-      var left = MAX_SECONDS;
-      if (onTick) onTick(left);
-      var tickTimer = setInterval(function () {
-        left -= 1;
-        if (onTick) onTick(Math.max(0, left));
-      }, 1000);
-
-      var hardStop = setTimeout(function () {
-        if (rec.state === 'recording') rec.stop();
-      }, MAX_SECONDS * 1000);
-
-      return {
-        stop: function () { if (rec.state === 'recording') rec.stop(); },
-        maxSeconds: MAX_SECONDS
-      };
-    }
-  };
-
-  global.PCVideo = Video;
-})(window);
+        return res;
+      }).catch(function () { return caches.match('index.html'); });
+    })
+  );
+});
