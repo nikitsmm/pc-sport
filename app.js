@@ -343,17 +343,53 @@
       recSession.stream,
       function (secLeft) { $('#rec-timer').textContent = '00:' + String(secLeft).padStart(2, '0'); },
       function (blob, ext) {
-        recSession.blob = blob;
-        recSession.ext = ext;
         $('#rec-live').hidden = true;
         $('#rec-timer').hidden = true;
         $('#rec-controls-recording').hidden = true;
-        $('#rec-controls-preview').hidden = false;
-        var preview = $('#rec-preview');
-        preview.hidden = false;
-        preview.src = URL.createObjectURL(blob);
-        var sizeKb = Math.round(blob.size / 1024);
-        $('#rec-msg').textContent = 'Готово, ' + (sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' МБ' : sizeKb + ' КБ') + '.';
+        showRecordedPreview(blob, ext);
+      }
+    );
+  }
+
+  /* Общий финиш и для живой записи, и для перекодированного файла из
+     галереи — дальше человек видит один и тот же предпросмотр с
+     кнопками «Ещё раз» / «Отправить», не важно, откуда взялся ролик. */
+  function showRecordedPreview(blob, ext) {
+    recSession.blob = blob;
+    recSession.ext = ext;
+    $('#rec-controls-preview').hidden = false;
+    var preview = $('#rec-preview');
+    preview.hidden = false;
+    preview.src = URL.createObjectURL(blob);
+    var sizeKb = Math.round(blob.size / 1024);
+    $('#rec-msg').textContent = 'Готово, ' + (sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' МБ' : sizeKb + ' КБ') + '.';
+  }
+
+  function openGalleryPicker() {
+    if (!recSession) return;
+    $('#rec-file').click();
+  }
+
+  function handleGalleryFile(file) {
+    if (!file || !recSession) return;
+    $('#rec-live').hidden = true;
+    $('#rec-controls').hidden = true;
+    $('#rec-timer').hidden = false;
+    $('#rec-timer').textContent = 'обработка…';
+    $('#rec-msg').textContent = 'Сжимаю видео из галереи — это может занять несколько секунд.';
+
+    PCVideo.compressFile(
+      file,
+      function (secLeft) { $('#rec-timer').textContent = 'ещё ~' + secLeft + ' с'; },
+      function (blob, ext) {
+        $('#rec-timer').hidden = true;
+        showRecordedPreview(blob, ext);
+      },
+      function (err) {
+        $('#rec-timer').hidden = true;
+        $('#rec-controls').hidden = false;
+        $('#rec-live').hidden = false;
+        $('#rec-msg').textContent = 'Не получилось обработать: ' + err.message;
       }
     );
   }
@@ -557,6 +593,12 @@
     $('#rec-stop').addEventListener('click', function () { if (recSession && recSession.ctrl) recSession.ctrl.stop(); });
     $('#rec-retake').addEventListener('click', retakeUI);
     $('#rec-send').addEventListener('click', sendRecordingUI);
+    $('#rec-gallery').addEventListener('click', openGalleryPicker);
+    $('#rec-file').addEventListener('change', function () {
+      var f = this.files[0];
+      this.value = '';
+      handleGalleryFile(f);
+    });
     $('#rec-flip').addEventListener('click', function () {
       if (!recSession) return;
       var next = recSession.facing === 'user' ? 'environment' : 'user';

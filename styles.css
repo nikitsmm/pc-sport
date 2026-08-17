@@ -182,6 +182,6 @@ table.log td button{width:100%;border:0;background:transparent;padding:11px 2px;
 .rec-timer{position:absolute;top:10px;left:10px;background:var(--signal);color:#fff;font-family:"JetBrains Mono",monospace;
   font-weight:700;font-size:13px;padding:4px 9px;letter-spacing:.04em;}
 .rec-msg{padding:10px 16px 0;font-size:13px;color:#9FB0BE;min-height:18px;}
-.rec-controls{display:flex;gap:10px;padding:14px 16px 0;}
-.rec-controls .btn{flex:1;text-align:center;}
+.rec-controls{display:flex;gap:8px;padding:14px 16px 0;}
+.rec-controls .btn{flex:1;text-align:center;padding-left:8px;padding-right:8px;font-size:10.5px;white-space:nowrap;}
 
