@@ -145,14 +145,23 @@ table.log td button{width:100%;border:0;background:transparent;padding:11px 2px;
 /* ---------- нижняя навигация ---------- */
 .tabs{
   position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--card);
-  border-top:1px solid var(--rule);display:grid;grid-template-columns:repeat(6,1fr);
+  border-top:1px solid var(--rule);display:grid;grid-template-columns:repeat(4,1fr);
   padding-bottom:var(--safe-b);
 }
-.tabs button{background:transparent;border:0;padding:10px 1px 9px;display:flex;flex-direction:column;
-  align-items:center;gap:3px;font-size:9.5px;font-weight:600;color:var(--muted);letter-spacing:.01em;}
-.tabs button .g{font-size:16px;line-height:1;}
+.tabs button{background:transparent;border:0;padding:11px 2px 10px;display:flex;flex-direction:column;
+  align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.02em;}
+.tabs button .g{font-size:18px;line-height:1;}
 .tabs button.on{color:var(--ink);}
 .tabs button.on .g{transform:translateY(-1px);}
+
+/* ---------- мини-кнопки сверху на «Сегодня» ---------- */
+.quicklinks{display:flex;gap:8px;margin-bottom:16px;}
+.quicklinks button{position:relative;flex:1;background:var(--card);border:1px solid var(--rule);
+  padding:10px 6px;display:flex;flex-direction:column;align-items:center;gap:3px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:600;color:var(--ink);letter-spacing:.02em;}
+.quicklinks button .g{font-size:15px;line-height:1;}
+#ql-money-sum.zero{color:var(--ok);}
+#ql-money-sum.owe{color:var(--signal);}
 
 .datebar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;}
 .datebar .d{font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:600;}
@@ -185,6 +194,9 @@ table.log td button{width:100%;border:0;background:transparent;padding:11px 2px;
 .rec-head{display:flex;justify-content:space-between;align-items:center;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 10px;
   font-family:"Unbounded",sans-serif;font-weight:600;font-size:14px;text-transform:uppercase;}
 .rec-head button{background:transparent;border:0;color:#fff;font-size:18px;padding:4px 8px;}
+.rec-limit-warn{margin:0 16px 10px;padding:7px 11px;background:#3A2E10;color:#E0A93A;
+  font-family:"JetBrains Mono",monospace;font-size:11.5px;font-weight:700;letter-spacing:.02em;
+  border:1px solid #5A4718;text-align:center;}
 .rec-stage{position:relative;width:100%;aspect-ratio:3/4;background:#000;overflow:hidden;}
 .rec-stage video{width:100%;height:100%;object-fit:cover;display:block;}
 .rec-timer{position:absolute;top:10px;left:10px;background:var(--signal);color:#fff;font-family:"JetBrains Mono",monospace;
@@ -224,8 +236,8 @@ table.log td button{width:100%;border:0;background:transparent;padding:11px 2px;
   font-size:15px;font-family:"IBM Plex Sans",sans-serif;}
 .chat-input button{width:46px;flex-shrink:0;padding:0;font-size:17px;}
 
-/* ---------- бейдж непрочитанных на вкладке ---------- */
-.chat-dot{position:absolute;top:4px;right:calc(50% - 20px);min-width:15px;height:15px;padding:0 3px;
+/* ---------- бейдж непрочитанных на кнопке чата ---------- */
+.chat-dot{position:absolute;top:4px;right:6px;min-width:15px;height:15px;padding:0 3px;
   background:var(--signal);color:#fff;border-radius:8px;font-family:"JetBrains Mono",monospace;
   font-size:9.5px;font-weight:700;line-height:15px;text-align:center;}
 

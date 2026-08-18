@@ -18,7 +18,8 @@
 (function (global) {
   'use strict';
 
-  var MAX_SECONDS = 35;       // жёсткий потолок длительности ролика
+  var MAX_SECONDS = 60;       // жёсткий потолок длительности ролика (видео живёт в Object Storage —
+                               // ограничения по размеру для надёжного проигрывания больше нет)
   var TARGET_BITRATE = 700000; // ~700 кбит/с — для 35 сек это ~3 МБ
   var TARGET_WIDTH = 480;
   var TARGET_HEIGHT = 640;

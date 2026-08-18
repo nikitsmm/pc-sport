@@ -19,7 +19,7 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v16 · 17.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v21 · 17.08.2026</span></div>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
 </header>
@@ -28,6 +28,10 @@
 
   <!-- ================= СЕГОДНЯ ================= -->
   <section class="view on" id="v-today">
+    <div class="quicklinks">
+      <button data-view="money" id="ql-money"><span class="g">₽</span><span id="ql-money-sum">Счёт</span></button>
+      <button data-view="rules"><span class="g">§</span>Правила</button>
+    </div>
     <div class="datebar">
       <button id="d-prev" aria-label="Предыдущий день">‹</button>
       <div class="d" id="d-label">—</div>
@@ -80,6 +84,7 @@
     <div class="doc">
       <h3>Основное</h3>
       <p>Каждый день выполняешь свой комплекс и до <b>23:59:59</b> выкладываешь видео-подтверждение в чат «ПЦ Спорт».</p>
+      <p class="note">Видео — максимум 1 минута на ролик.</p>
 
       <h3>Нормы</h3>
       <ul>
@@ -131,12 +136,6 @@
 
   <!-- ================= НАСТРОЙКИ ================= -->
   <section class="view" id="v-cfg">
-    <h2>Я в чате</h2>
-    <div class="panel">
-      <p class="h" style="margin:0 0 10px">Локально на этом телефоне, не синхронизируется.</p>
-      <div class="who-grid" id="cfg-who-pick"></div>
-    </div>
-
     <h2>Синхронизация</h2>
     <div class="panel">
       <label for="cfg-backend">Где хранятся данные</label>
@@ -213,9 +212,7 @@
 <nav class="tabs" id="tabs">
   <button data-view="today" class="on"><span class="g">▣</span>Сегодня</button>
   <button data-view="log"><span class="g">▤</span>Журнал</button>
-  <button data-view="money"><span class="g">₽</span>Счёт</button>
   <button data-view="chat" style="position:relative"><span class="g">💬</span>Чат<span class="chat-dot" id="chat-dot" hidden></span></button>
-  <button data-view="rules"><span class="g">§</span>Правила</button>
   <button data-view="cfg"><span class="g">⚙</span>Настройки</button>
 </nav>
 
@@ -225,6 +222,7 @@
       <span id="rec-who">—</span>
       <button id="rec-close" aria-label="Закрыть">✕</button>
     </div>
+    <div class="rec-limit-warn">⏱ Максимум 1 минута на ролик</div>
     <div class="rec-stage">
       <video id="rec-live" autoplay muted playsinline></video>
       <video id="rec-preview" playsinline controls hidden></video>

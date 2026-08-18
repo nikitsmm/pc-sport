@@ -166,9 +166,14 @@
     reset: function () { LS.del(LS_STATE); },
 
     /* ============================================================
-       Видео — та же облачная функция, но байты идут напрямую
-       браузер → Яндекс.Диск: функция лишь выдаёт временные ссылки
-       на загрузку/скачивание и ведёт общий индекс роликов.
+       Видео — Yandex Object Storage (S3-совместимое), не Диск.
+
+       Раньше здесь было ветвление «маленький файл — через саму функцию,
+       большой — через капризную временную ссылку Диска». С переездом
+       видео на Object Storage ветвление не нужно: presigned-ссылки
+       нормально поддерживают Range для <video> и не ограничены размером
+       файла — один и тот же путь работает для 5-секундного и
+       минутного ролика.
        ============================================================ */
     video: {
       supported: function () {
@@ -183,10 +188,9 @@
          Возвращает { confirmed: bool }. Если PUT не прошёл — это
          настоящая ошибка (throw), файл не ушёл никуда. Если PUT прошёл,
          а confirm_upload после трёх попыток так и не подтвердился —
-         это НЕ потеря: файл уже физически на Диске, просто запись о нём
+         это НЕ потеря: файл уже физически в бакете, просто запись о нём
          в общий список подтянется сама при следующем открытии «Видео
-         дня» (list_videos сверяется с реальным содержимым Диска). Ошибку
-         в этом случае не бросаем, чтобы не выглядело как «не отправилось». */
+         дня» (list_videos сверяется с реальным содержимым бакета). */
       upload: async function (participantId, date, blob, ext, onProgress, onPhase) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) {
@@ -197,13 +201,17 @@
         await new Promise(function (resolve, reject) {
           var xhr = new XMLHttpRequest();
           xhr.open('PUT', meta.uploadUrl, true);
+          /* Важно: Content-Type должен совпадать с тем, что подписано на
+             бэкенде при выдаче presigned-ссылки — иначе Object Storage
+             отклонит запрос как несовпадающий с подписью. */
+          if (meta.contentType) xhr.setRequestHeader('Content-Type', meta.contentType);
           xhr.upload.onprogress = function (e) {
             if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total);
-            if (e.lengthComputable && e.loaded >= e.total && onPhase) onPhase('Файл отправлен, жду подтверждения от Диска…');
+            if (e.lengthComputable && e.loaded >= e.total && onPhase) onPhase('Файл отправлен, жду подтверждения…');
           };
           xhr.onload = function () {
             if (xhr.status >= 200 && xhr.status < 300) resolve();
-            else reject(new Error('Не удалось загрузить видео на Диск (HTTP ' + xhr.status + ')'));
+            else reject(new Error('Не удалось загрузить видео (HTTP ' + xhr.status + ')'));
           };
           xhr.onerror = function () { reject(new Error('Сеть прервалась во время загрузки видео')); };
           xhr.send(blob);
@@ -226,35 +234,22 @@
         return api(cfg.url, 'list_videos', {});
       },
 
-      /* Полная сверка индекса со всем содержимым папки videos/ на Диске,
-         без ограничения окном хранения — для кнопки в настройках, когда
-         хочется убедиться прямо сейчас, что ничего не потерялось. */
+      /* Полная сверка индекса со всем содержимым бакета, без ограничения
+         окном хранения — для кнопки в настройках, когда хочется
+         убедиться прямо сейчас, что ничего не потерялось. */
       sync: async function () {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
         return api(cfg.url, 'sync_videos', {});
       },
 
-      /* Возвращает { url, isBlob }. Для небольших роликов байты
-         забираются через саму функцию и заворачиваются в blob: URL —
-         это работает надёжно (без Range-запросов, disposition и прочих
-         капризов временных ссылок Диска, на которых уже дважды
-         спотыкались). Для крупных файлов — прямая ссылка на Диск как
-         запасной вариант. */
+      /* Возвращает { url }. Presigned-ссылка Object Storage — можно
+         сразу отдавать в <video src>, Range поддерживается штатно. */
       playUrl: async function (path) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
-        try {
-          var d = await api(cfg.url, 'get_video_bytes', { path: path });
-          var bin = atob(d.data);
-          var bytes = new Uint8Array(bin.length);
-          for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-          var blob = new Blob([bytes], { type: d.contentType || 'video/mp4' });
-          return { url: URL.createObjectURL(blob), isBlob: true };
-        } catch (e) {
-          var d2 = await api(cfg.url, 'get_download_url', { path: path });
-          return { url: d2.url, isBlob: false, fallbackReason: e.message };
-        }
+        var d = await api(cfg.url, 'get_download_url', { path: path });
+        return { url: d.url };
       }
     },
 

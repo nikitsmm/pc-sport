@@ -423,7 +423,12 @@
     return 'mp4';
   }
 
-  var SKIP_COMPRESS_UNDER = 3 * 1024 * 1024; // уже маленький файл — сжимать незачем
+  /* Раньше это число было привязано к порогу надёжного проигрывания на
+     бэкенде (VIDEO_INLINE_MAX_BYTES) — с переездом видео на Object
+     Storage такого порога больше нет, любой размер играет одинаково
+     надёжно. Сжатие оставлено чисто ради скорости загрузки на мобильной
+     сети — маленький файл заливается быстрее большого, вот и всё. */
+  var SKIP_COMPRESS_UNDER = 2.5 * 1024 * 1024;
 
   function handleGalleryFile(file) {
     if (!file || !recSession) return;
@@ -516,8 +521,6 @@
   }
 
   /* ---------- просмотр ---------- */
-  var currentBlobUrl = null;
-
   function openPlayer(path, who) {
     $('#play-who').textContent = who || '—';
     $('#play-video').src = '';
@@ -525,11 +528,9 @@
     $('#play-fallback').href = '#';
     $('#playOverlay').classList.add('on');
     Storage.video.playUrl(path).then(function (r) {
-      if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
-      if (r.isBlob) currentBlobUrl = r.url;
       $('#play-video').src = r.url;
       $('#play-fallback').href = r.url;
-      $('#play-msg').textContent = r.isBlob ? '' : ('Надёжный способ не сработал (' + r.fallbackReason + ') — играю через прямую ссылку Диска.');
+      $('#play-msg').textContent = '';
     }).catch(function (e) {
       $('#play-msg').textContent = 'Ошибка: ' + e.message;
     });
@@ -539,7 +540,6 @@
     var v = $('#play-video');
     v.pause();
     v.src = '';
-    if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
     $('#play-msg').textContent = '';
     $('#playOverlay').classList.remove('on');
   }
@@ -753,6 +753,13 @@
      ============================================================ */
   function renderMoney() {
     var L = ledger();
+
+    var sumEl = $('#ql-money-sum');
+    if (sumEl) {
+      sumEl.textContent = L.total ? money(L.total) : 'Счёт: 0';
+      sumEl.className = L.total ? 'owe' : 'zero';
+    }
+
     $('#ledger').innerHTML = state.participants.map(function (p) {
       var v = L.balance[p.id] || 0;
       var cls = v > 0.001 ? 'plus' : v < -0.001 ? 'minus' : 'zero';
@@ -794,12 +801,6 @@
   function renderCfg() {
     renderLogBox();
     var cfg = Storage.config.read();
-    renderWhoPicker('#cfg-who-pick', Storage.identity.read(), function (id) {
-      Storage.identity.write(id);
-      PCLog.info('Выбрана идентичность в чате: ' + id);
-      renderCfg();
-      renderChat();
-    });
     $('#cfg-backend').value = cfg.backend;
     $('#cfg-url').value = cfg.url || '';
     $('#cfg-cloud').hidden = cfg.backend !== 'cloud';
@@ -864,7 +865,7 @@
   function show(view) {
     document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('on'); });
     $('#v-' + view).classList.add('on');
-    document.querySelectorAll('#tabs button').forEach(function (b) {
+    document.querySelectorAll('[data-view]').forEach(function (b) {
       b.classList.toggle('on', b.dataset.view === view);
     });
     window.scrollTo(0, 0);
@@ -878,7 +879,7 @@
   }
 
   function bind() {
-    document.querySelectorAll('#tabs button').forEach(function (b) {
+    document.querySelectorAll('[data-view]').forEach(function (b) {
       b.addEventListener('click', function () { show(b.dataset.view); });
     });
 
