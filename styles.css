@@ -42,6 +42,11 @@ h2{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:11.5px;fo
 .appbar .clock{font-family:"JetBrains Mono",monospace;font-size:12px;color:#9FB0BE;text-align:right;line-height:1.25;}
 .appbar .clock b{display:block;color:#fff;font-size:15px;font-weight:700;}
 .appbar .clock.late b{color:#FF8A80;}
+.sync-dot{width:7px;height:7px;border-radius:50%;background:#5A6B7A;flex-shrink:0;margin-right:-2px;}
+.sync-dot.ok{background:#3FA574;}
+.sync-dot.pending{background:#E0A93A;animation:pulse 1s ease-in-out infinite;}
+.sync-dot.err{background:var(--signal);}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 
 .wrap{max-width:640px;margin:0 auto;padding:16px 12px 8px;}
 .view{display:none;}
@@ -140,12 +145,12 @@ table.log td button{width:100%;border:0;background:transparent;padding:11px 2px;
 /* ---------- нижняя навигация ---------- */
 .tabs{
   position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--card);
-  border-top:1px solid var(--rule);display:grid;grid-template-columns:repeat(5,1fr);
+  border-top:1px solid var(--rule);display:grid;grid-template-columns:repeat(6,1fr);
   padding-bottom:var(--safe-b);
 }
-.tabs button{background:transparent;border:0;padding:10px 2px 9px;display:flex;flex-direction:column;
-  align-items:center;gap:3px;font-size:10.5px;font-weight:600;color:var(--muted);letter-spacing:.02em;}
-.tabs button .g{font-size:17px;line-height:1;}
+.tabs button{background:transparent;border:0;padding:10px 1px 9px;display:flex;flex-direction:column;
+  align-items:center;gap:3px;font-size:9.5px;font-weight:600;color:var(--muted);letter-spacing:.01em;}
+.tabs button .g{font-size:16px;line-height:1;}
 .tabs button.on{color:var(--ink);}
 .tabs button.on .g{transform:translateY(-1px);}
 
@@ -191,4 +196,42 @@ table.log td button{width:100%;border:0;background:transparent;padding:11px 2px;
 .btn.cam[disabled]{opacity:.4;}
 #rec-toggle.active{background:#4A5B6B;border-color:#4A5B6B;}
 
+/* ---------- выбор «кто я» ---------- */
+.who-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
+.who-grid button{background:var(--card);border:1px solid var(--rule);padding:12px 10px;
+  font-family:"Unbounded",sans-serif;font-weight:600;font-size:14px;text-transform:uppercase;color:var(--ink);}
+.who-grid button.on{background:var(--ink);border-color:var(--ink);color:#fff;}
+
+/* ---------- чат ---------- */
+#v-chat{display:flex;flex-direction:column;min-height:calc(100vh - 260px);}
+.chat-log{flex:1;display:flex;flex-direction:column;gap:2px;padding-bottom:8px;}
+.chat-day{align-self:center;font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--muted);
+  background:var(--paper);padding:3px 10px;margin:12px 0 8px;text-transform:uppercase;letter-spacing:.06em;}
+.chat-msg{max-width:78%;padding:8px 12px;margin-bottom:6px;font-size:14.5px;line-height:1.4;
+  background:var(--card);border:1px solid var(--rule);align-self:flex-start;}
+.chat-msg .who{font-family:"JetBrains Mono",monospace;font-size:10.5px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--steel);margin-bottom:2px;}
+.chat-msg .txt{white-space:pre-wrap;word-break:break-word;}
+.chat-msg .t{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--muted);margin-top:3px;text-align:right;}
+.chat-msg.mine{align-self:flex-end;background:var(--ink);color:#fff;border-color:var(--ink);}
+.chat-msg.mine .who{color:#9FB0BE;}
+.chat-msg.mine .t{color:#9FB0BE;}
+.chat-msg.pending{opacity:.55;}
+
+.chat-input{position:sticky;bottom:calc(70px + var(--safe-b));display:flex;gap:8px;
+  background:var(--paper);padding:8px 0 4px;}
+.chat-input input{flex:1;padding:11px 13px;border:1px solid var(--rule);background:var(--card);
+  font-size:15px;font-family:"IBM Plex Sans",sans-serif;}
+.chat-input button{width:46px;flex-shrink:0;padding:0;font-size:17px;}
+
+/* ---------- бейдж непрочитанных на вкладке ---------- */
+.chat-dot{position:absolute;top:4px;right:calc(50% - 20px);min-width:15px;height:15px;padding:0 3px;
+  background:var(--signal);color:#fff;border-radius:8px;font-family:"JetBrains Mono",monospace;
+  font-size:9.5px;font-weight:700;line-height:15px;text-align:center;}
+
+/* ---------- логи ---------- */
+.log-box{background:var(--ink);color:#B7C4CE;font-family:"JetBrains Mono",monospace;font-size:11px;
+  line-height:1.5;padding:10px;max-height:220px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;}
+.log-box .lvl-error{color:#FF8A80;}
+.log-box .lvl-warn{color:#E0A93A;}
 

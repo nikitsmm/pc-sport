@@ -33,6 +33,9 @@
   var saveTimer = null;
   var videoIndex = { items: [], retentionDays: 0 };  // кэш ответа list_videos
   var recSession = null;  // { stream, ctrl, participantId, date, blob, ext }
+  var chatMessages = [];  // все известные сообщения, отсортированные по времени
+  var chatPollTimer = null;
+  var chatSending = false;
 
   /* ============================================================
      Даты
@@ -164,11 +167,30 @@
     Storage.writeLocal(state);
     render();
     clearTimeout(saveTimer);
+    setSyncDot('pending');
     saveTimer = setTimeout(function () {
+      PCLog.info('Сохраняю изменения на Диск…');
       Storage.push(state).then(function (r) {
-        if (r && r.synced) setCfgStatus('Выгружено на Яндекс.Диск', 'ok');
-      }).catch(function (e) { setCfgStatus(e.message, 'err'); });
+        if (r && r.synced) {
+          PCLog.info('Сохранено на Диск');
+          setCfgStatus('Выгружено на Яндекс.Диск', 'ok');
+          setSyncDot('ok');
+        } else {
+          setSyncDot('local');
+        }
+      }).catch(function (e) {
+        PCLog.error('Не удалось сохранить на Диск: ' + e.message);
+        setCfgStatus(e.message, 'err');
+        setSyncDot('err');
+      });
     }, 900);
+  }
+
+  function setSyncDot(state) {
+    var el = $('#sync-dot');
+    if (!el) return;
+    el.className = 'sync-dot ' + state;
+    el.title = { pending: 'Сохраняю…', ok: 'Сохранено на Диске', local: 'Только локально', err: 'Ошибка сохранения' }[state] || '';
   }
 
   function normalize(s) {
@@ -401,6 +423,8 @@
     return 'mp4';
   }
 
+  var SKIP_COMPRESS_UNDER = 3 * 1024 * 1024; // уже маленький файл — сжимать незачем
+
   function handleGalleryFile(file) {
     if (!file || !recSession) return;
     if (!file.type || file.type.indexOf('video') !== 0) {
@@ -408,7 +432,36 @@
       return;
     }
     $('#rec-live').hidden = true;
-    showRecordedPreview(file, extForMime(file.type));
+
+    if (!PCVideo.supported() || file.size <= SKIP_COMPRESS_UNDER) {
+      showRecordedPreview(file, extForMime(file.type));
+      return;
+    }
+
+    var originalKb = Math.round(file.size / 1024);
+    $('#rec-timer').hidden = false;
+    $('#rec-timer').textContent = 'обработка…';
+    $('#rec-msg').textContent = 'Сжимаю видео из галереи (' + (originalKb / 1024).toFixed(1) + ' МБ) — так загрузится быстрее.';
+
+    PCVideo.compressFile(
+      file,
+      function (secLeft) { $('#rec-timer').textContent = 'ещё ~' + secLeft + ' с'; },
+      function (blob, ext) {
+        $('#rec-timer').hidden = true;
+        showRecordedPreview(blob, ext);
+        var newKb = Math.round(blob.size / 1024);
+        $('#rec-msg').textContent += ' Было ' + (originalKb > 1024 ? (originalKb / 1024).toFixed(1) + ' МБ' : originalKb + ' КБ') +
+          ' → стало ' + (newKb > 1024 ? (newKb / 1024).toFixed(1) + ' МБ' : newKb + ' КБ') + '.';
+      },
+      function () {
+        /* Сжатие не задалось — не теряем видео, отправляем как есть.
+           Единственная жертва — медленнее загрузится, зато гарантированно
+           не пустой файл. */
+        $('#rec-timer').hidden = true;
+        showRecordedPreview(file, extForMime(file.type));
+        $('#rec-msg').textContent = 'Не получилось сжать — отправлю как есть, может занять больше времени.';
+      }
+    );
   }
 
   function retakeUI() {
@@ -427,8 +480,12 @@
   function sendRecordingUI() {
     if (!recSession || !recSession.blob) return;
     var s = recSession;
+    var who = participantName(s.participantId);
     $('#rec-controls-preview').hidden = true;
     $('#rec-msg').textContent = 'Отправляю… 0%';
+
+    PCLog.info('Видео: начинаю загрузку (' + who + ', ' + shortDate(s.date) + ', ' + Math.round(s.blob.size / 1024) + ' КБ)');
+    chatAnnounce(s.participantId, '🎥 Начал загрузку видео на Диск…');
 
     var slowHint = setTimeout(function () {
       $('#rec-msg').textContent += ' (Яндекс.Диску иногда нужно чуть больше времени на обработку — это ещё не зависание)';
@@ -443,6 +500,8 @@
       $('#rec-msg').textContent = r.confirmed
         ? 'Отправлено'
         : 'Файл на Диске, но подтверждение задержалось — появится в списке само';
+      PCLog.info('Видео: загружено (' + who + ', confirmed=' + r.confirmed + ')');
+      chatAnnounce(s.participantId, '✅ Загрузил видео на Диск' + (r.confirmed ? '' : ' (появится в списке чуть позже)'));
       setTimeout(function () {
         closeRecorder();
         refreshVideoIndex();
@@ -451,6 +510,8 @@
       clearTimeout(slowHint);
       $('#rec-msg').textContent = 'Не отправилось: ' + e.message;
       $('#rec-controls-preview').hidden = false;
+      PCLog.error('Видео: загрузка не удалась (' + who + '): ' + e.message);
+      chatAnnounce(s.participantId, '⚠️ Не получилось загрузить видео: ' + e.message);
     });
   }
 
@@ -481,6 +542,172 @@
     if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
     $('#play-msg').textContent = '';
     $('#playOverlay').classList.remove('on');
+  }
+
+  /* ============================================================
+     Чат
+     ============================================================ */
+  var LS_LAST_READ = 'pcsport.chatLastRead';
+
+  function participantName(id) {
+    var p = state.participants.filter(function (x) { return x.id === id; })[0];
+    return p ? p.name : id;
+  }
+
+  function renderWhoPicker(hostSel, selectedId, onPick) {
+    var host = $(hostSel);
+    host.innerHTML = state.participants.map(function (p) {
+      return '<button data-id="' + p.id + '" class="' + (p.id === selectedId ? 'on' : '') + '">' + p.name + '</button>';
+    }).join('');
+    host.querySelectorAll('button').forEach(function (b) {
+      b.addEventListener('click', function () { onPick(b.dataset.id); });
+    });
+  }
+
+  function renderChat() {
+    var myId = Storage.identity.read();
+    var known = state.participants.some(function (p) { return p.id === myId; });
+
+    $('#chat-noauth').hidden = known;
+    $('#chat-wrap').hidden = !known;
+
+    if (!known) {
+      renderWhoPicker('#chat-who-pick', myId, function (id) {
+        Storage.identity.write(id);
+        PCLog.info('Выбрана идентичность в чате: ' + id);
+        renderChat();
+      });
+      return;
+    }
+
+    var log = $('#chat-log');
+    var wasAtBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 60;
+
+    var lastDay = '';
+    log.innerHTML = chatMessages.map(function (m) {
+      var day = m.at ? m.at.slice(0, 10) : '';
+      var sep = '';
+      if (day && day !== lastDay) { sep = '<div class="chat-day">' + shortDate(day) + '</div>'; lastDay = day; }
+      var mine = m.participantId === myId;
+      var time = m.at ? m.at.slice(11, 16) : '';
+      var cls = 'chat-msg' + (mine ? ' mine' : '') + (m.pending ? ' pending' : '');
+      return sep + '<div class="' + cls + '">' +
+        (mine ? '' : '<div class="who">' + esc(participantName(m.participantId)) + '</div>') +
+        '<div class="txt">' + esc(m.text) + '</div>' +
+        '<div class="t">' + time + (m.pending ? ' · отправка…' : '') + '</div></div>';
+    }).join('');
+
+    if (wasAtBottom) log.scrollTop = log.scrollHeight;
+  }
+
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s == null ? '' : String(s);
+    return d.innerHTML;
+  }
+
+  function chatMerge(items) {
+    if (!items || !items.length) return false;
+    var byId = {};
+    chatMessages.forEach(function (m) { byId[m.id] = m; });
+    var added = false;
+    items.forEach(function (m) {
+      if (!byId[m.id]) { chatMessages.push(m); byId[m.id] = m; added = true; }
+    });
+    if (added) {
+      chatMessages.sort(function (a, b) { return (a.at || '') < (b.at || '') ? -1 : 1; });
+      Storage.chat.writeCache(chatMessages);
+    }
+    return added;
+  }
+
+  function pollChat(isInitial) {
+    var cfg = Storage.config.read();
+    if (cfg.backend !== 'cloud' || !cfg.url) return Promise.resolve();
+    var since = chatMessages.length ? chatMessages[chatMessages.length - 1].id : null;
+    return Storage.chat.fetch(isInitial ? null : since).then(function (r) {
+      var items = (r && r.items) || [];
+      var myId = Storage.identity.read();
+      var newFromOthers = items.filter(function (m) {
+        return !chatMessages.some(function (x) { return x.id === m.id; }) && m.participantId !== myId;
+      });
+      var changed = chatMerge(items);
+      if (changed) {
+        var onChatTab = document.getElementById('v-chat').classList.contains('on');
+        if (onChatTab && !document.hidden) {
+          markChatRead();
+          renderChat();
+        } else if (newFromOthers.length) {
+          bumpChatUnread(newFromOthers.length);
+          notifyNewMessages(newFromOthers);
+        }
+      }
+    }).catch(function (e) { PCLog.warn('Чат: не удалось обновить — ' + e.message); });
+  }
+
+  function startChatPolling() {
+    stopChatPolling();
+    pollChat(true);
+    chatPollTimer = setInterval(function () { pollChat(false); }, 8000);
+  }
+  function stopChatPolling() {
+    clearInterval(chatPollTimer);
+    chatPollTimer = null;
+  }
+
+  function bumpChatUnread(n) {
+    var dot = $('#chat-dot');
+    if (!dot) return;
+    var count = (parseInt(dot.textContent, 10) || 0) + n;
+    dot.textContent = String(count);
+    dot.hidden = false;
+  }
+
+  function markChatRead() {
+    var dot = $('#chat-dot');
+    if (dot) { dot.hidden = true; dot.textContent = ''; }
+    try { localStorage.setItem(LS_LAST_READ, chatMessages.length ? chatMessages[chatMessages.length - 1].id : ''); } catch (e) {}
+  }
+
+  function notifyNewMessages(items) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!document.hidden) return; // приложение и так на экране — хватит бейджа
+    try {
+      var last = items[items.length - 1];
+      var title = items.length > 1 ? ('Чат ПЦ Спорт · ' + items.length + ' новых') : ('Чат ПЦ Спорт · ' + participantName(last.participantId));
+      var n = new Notification(title, { body: last.text, tag: 'pcsport-chat' });
+      n.onclick = function () { window.focus(); };
+    } catch (e) { PCLog.warn('Notification: ' + e.message); }
+  }
+
+  function sendChatMessage(text) {
+    var myId = Storage.identity.read();
+    text = (text || '').trim();
+    if (!text || !myId) return Promise.resolve();
+    var tempId = 'tmp-' + Date.now();
+    var optimistic = { id: tempId, participantId: myId, text: text, at: new Date().toISOString(), pending: true };
+    chatMessages.push(optimistic);
+    renderChat();
+    var log = $('#chat-log');
+    if (log) log.scrollTop = log.scrollHeight;
+    return Storage.chat.send(myId, text).then(function (msg) {
+      chatMessages = chatMessages.filter(function (m) { return m.id !== tempId; });
+      chatMerge([msg]);
+      renderChat();
+    }).catch(function (e) {
+      PCLog.error('Чат: сообщение не отправилось — ' + e.message);
+      var m = chatMessages.filter(function (x) { return x.id === tempId; })[0];
+      if (m) { m.pending = false; m.failed = true; m.text += '  [не отправлено]'; }
+      renderChat();
+    });
+  }
+
+  /* Автосообщения о видео — от лица того, кто грузит, не от «бота»:
+     так в чате видно и факт, и кто именно снимал. Отправка не должна
+     мешать самой загрузке видео, поэтому без await и без остановки
+     процесса при сбое. */
+  function chatAnnounce(participantId, text) {
+    Storage.chat.send(participantId, text).catch(function (e) { PCLog.warn('Чат-уведомление не ушло: ' + e.message); });
   }
 
   function plural(n, one, few, many) {
@@ -551,8 +778,28 @@
   /* ============================================================
      Отрисовка — Настройки
      ============================================================ */
+  function renderLogBox() {
+    var box = $('#log-box');
+    if (!box) return;
+    var lines = PCLog.all();
+    box.innerHTML = lines.length
+      ? lines.slice(-100).map(function (e) {
+          var cls = e.level === 'error' ? ' lvl-error' : e.level === 'warn' ? ' lvl-warn' : '';
+          return '<div class="' + cls + '">[' + PCLog.fmtTime(e.t) + '] ' + esc(e.msg) + '</div>';
+        }).join('')
+      : '<div style="opacity:.5">Пока пусто.</div>';
+    box.scrollTop = box.scrollHeight;
+  }
+
   function renderCfg() {
+    renderLogBox();
     var cfg = Storage.config.read();
+    renderWhoPicker('#cfg-who-pick', Storage.identity.read(), function (id) {
+      Storage.identity.write(id);
+      PCLog.info('Выбрана идентичность в чате: ' + id);
+      renderCfg();
+      renderChat();
+    });
     $('#cfg-backend').value = cfg.backend;
     $('#cfg-url').value = cfg.url || '';
     $('#cfg-cloud').hidden = cfg.backend !== 'cloud';
@@ -611,6 +858,7 @@
     renderLog();
     renderMoney();
     renderCfg();
+    renderChat();
   }
 
   function show(view) {
@@ -620,11 +868,62 @@
       b.classList.toggle('on', b.dataset.view === view);
     });
     window.scrollTo(0, 0);
+    if (view === 'chat') {
+      markChatRead();
+      renderChat();
+      startChatPolling();
+    } else {
+      stopChatPolling();
+    }
   }
 
   function bind() {
     document.querySelectorAll('#tabs button').forEach(function (b) {
       b.addEventListener('click', function () { show(b.dataset.view); });
+    });
+
+    $('#chat-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var inp = $('#chat-text');
+      var text = inp.value;
+      if (!text.trim() || chatSending) return;
+      chatSending = true;
+      inp.value = '';
+      sendChatMessage(text).finally(function () { chatSending = false; });
+    });
+
+    $('#cfg-notify').addEventListener('click', function () {
+      var st = $('#cfg-notify-status');
+      if (!('Notification' in window)) { st.textContent = 'Браузер не поддерживает уведомления'; st.className = 'status-line err'; return; }
+      Notification.requestPermission().then(function (perm) {
+        if (perm === 'granted') { st.textContent = 'Включено'; st.className = 'status-line ok'; PCLog.info('Уведомления разрешены'); }
+        else { st.textContent = 'Не разрешено в браузере'; st.className = 'status-line err'; PCLog.warn('Уведомления не разрешены: ' + perm); }
+      });
+    });
+
+    $('#log-copy').addEventListener('click', function () {
+      var text = PCLog.asText() || '(логов пока нет)';
+      var done = function () { var s = $('#log-status'); s.textContent = 'Скопировано'; s.className = 'status-line ok'; };
+      var fail = function () { var s = $('#log-status'); s.textContent = 'Не удалось скопировать — выдели текст вручную'; s.className = 'status-line err'; };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(fail);
+      } else {
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+          done();
+        } catch (e) { fail(); }
+      }
+    });
+
+    $('#log-clear').addEventListener('click', function () {
+      PCLog.clear();
+      renderLogBox();
+      $('#log-status').textContent = 'Очищено';
+      $('#log-status').className = 'status-line ok';
     });
 
     $('#d-prev').addEventListener('click', function () { cursor = shift(cursor, -1); renderToday(); });
@@ -755,6 +1054,7 @@
      ============================================================ */
   function boot() {
     state = normalize(Storage.readLocal());
+    chatMessages = Storage.chat.readCache();
     cursor = today();
     bind();
     render();
@@ -767,6 +1067,10 @@
       if (cursor > today()) cursor = today();
       render();
       refreshVideoIndex();
+      if (document.getElementById('v-chat').classList.contains('on')) {
+        markChatRead();
+        pollChat(false).then(renderChat);
+      }
       Storage.pull().then(function (remote) {
         if (!remote) return;
         var merged = normalize(Storage.merge(state, remote));

@@ -7,7 +7,7 @@
    телефон в сети, всегда грузится свежее; кэш нужен только когда сети
    вообще нет. */
 
-var CACHE = 'pcsport-v14';
+var CACHE = 'pcsport-v16';
 var SHELL = [
   './',
   'index.html',
@@ -15,6 +15,7 @@ var SHELL = [
   'app.js',
   'storage.js',
   'video.js',
+  'log.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

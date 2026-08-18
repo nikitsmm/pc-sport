@@ -15,6 +15,8 @@
      get_state  ()               → { state: {...} | null }
      save_state ({ state })      → { ok: true }
      ping       ()                → { ok: true }
+     send_message ({ participantId, text })  → { ok: true, message }
+     get_messages ({ since? })               → { items: [...] }
 
    Если схема действий в реальном бэкенде Herald Chat отличается —
    меняются только имена action и форма params/ответа ниже,
@@ -26,6 +28,8 @@
 
   var LS_STATE = 'pcsport.state';
   var LS_CFG = 'pcsport.config';
+  var LS_MYID = 'pcsport.myId';
+  var LS_CHAT_CACHE = 'pcsport.chatCache';
 
   /* ---------- безопасный localStorage (не падаем в песочницах) ---------- */
   var mem = {};
@@ -62,15 +66,23 @@
      ============================================================ */
   async function api(url, action, params) {
     if (!url) throw new Error('Не задан URL облачной функции');
-    var res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ action: action }, params || {}))
-    });
+    var res;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ action: action }, params || {}))
+      });
+    } catch (netErr) {
+      if (global.PCLog) PCLog.error('api(' + action + '): сеть — ' + netErr.message);
+      throw new Error('Нет связи с функцией: ' + netErr.message);
+    }
     var data = {};
     try { data = await res.json(); } catch (e) {}
     if (!res.ok || data.error) {
-      throw new Error(data.error_description || data.error || ('HTTP ' + res.status));
+      var msg = data.error_description || data.error || ('HTTP ' + res.status);
+      if (global.PCLog) PCLog.error('api(' + action + '): ' + msg);
+      throw new Error(msg);
     }
     return data;
   }
@@ -90,11 +102,21 @@
     throw lastErr;
   }
 
+  /* ---------- кто пишет с этого устройства ----------
+     Своего логина в приложении нет (тот же принцип, что и у отметок
+     дня, и у видео) — просто локальный выбор на телефоне, никуда не
+     синхронизируется, у каждого свой. */
+  var Identity = {
+    read: function () { return LS.get(LS_MYID) || ''; },
+    write: function (id) { LS.set(LS_MYID, id || ''); }
+  };
+
   /* ============================================================
      Публичный интерфейс — сигнатуры прежние, чтобы app.js не менять
      ============================================================ */
   var Storage = {
     config: Config,
+    identity: Identity,
 
     /* Локальная копия — читается мгновенно при старте. */
     readLocal: function () {
@@ -233,6 +255,37 @@
           var d2 = await api(cfg.url, 'get_download_url', { path: path });
           return { url: d2.url, isBlob: false, fallbackReason: e.message };
         }
+      }
+    },
+
+    /* ============================================================
+       Чат — общий файл на Диске, тот же принцип, что и у видео-индекса.
+       Локальный кэш даёт мгновенный список при открытии вкладки, пока
+       свежие сообщения подтягиваются в фоне.
+       ============================================================ */
+    chat: {
+      readCache: function () {
+        var raw = LS.get(LS_CHAT_CACHE);
+        if (!raw) return [];
+        try { return JSON.parse(raw); } catch (e) { return []; }
+      },
+      writeCache: function (items) { LS.set(LS_CHAT_CACHE, JSON.stringify(items)); },
+
+      /* since — id последнего уже известного сообщения, чтобы не
+         перекачивать всю историю на каждый опрос. */
+      fetch: async function (since) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) return { items: [] };
+        return api(cfg.url, 'get_messages', since ? { since: since } : {});
+      },
+
+      send: async function (participantId, text) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) {
+          throw new Error('Чат работает только при включённой облачной синхронизации');
+        }
+        var r = await apiRetry(cfg.url, 'send_message', { participantId: participantId, text: text }, 3);
+        return r.message;
       }
     }
   };
