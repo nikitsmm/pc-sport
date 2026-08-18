@@ -19,7 +19,7 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v26 · 17.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v28 · 17.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -237,7 +237,7 @@
   <div class="rec-box">
     <div class="rec-head">
       <span id="rec-who">—</span>
-      <button id="rec-close" aria-label="Закрыть">✕</button>
+      <button id="rec-close" class="close-safe" aria-label="Закрыть запись">← Закрыть</button>
     </div>
     <div class="rec-limit-warn">⏱ Максимум 1 минута на ролик</div>
     <div class="rec-stage">
@@ -269,7 +269,7 @@
 
 <div class="rec-overlay" id="playOverlay">
   <div class="rec-box">
-    <div class="rec-head"><span id="play-who">—</span><button id="play-close" aria-label="Закрыть">✕</button></div>
+    <div class="rec-head"><span id="play-who">—</span><button id="play-close" class="close-safe" aria-label="Закрыть просмотр">← Закрыть</button></div>
     <div class="rec-stage"><video id="play-video" playsinline controls></video></div>
     <div class="rec-msg" id="play-msg"></div>
     <div class="rec-controls">

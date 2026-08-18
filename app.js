@@ -168,22 +168,42 @@
     render();
     clearTimeout(saveTimer);
     setSyncDot('pending');
-    saveTimer = setTimeout(function () {
-      PCLog.info('Сохраняю изменения на Диск…');
-      Storage.push(state).then(function (r) {
-        if (r && r.synced) {
-          PCLog.info('Сохранено на Диск');
-          setCfgStatus('Выгружено на Яндекс.Диск', 'ok');
-          setSyncDot('ok');
-        } else {
-          setSyncDot('local');
-        }
-      }).catch(function (e) {
-        PCLog.error('Не удалось сохранить на Диск: ' + e.message);
-        setCfgStatus(e.message, 'err');
-        setSyncDot('err');
-      });
-    }, 900);
+    saveTimer = setTimeout(flushSave, 900);
+  }
+
+  /* Сама отправка на Диск — вынесена отдельно от commit(), чтобы её
+     можно было запустить и по обычному таймеру, и немедленно, когда
+     страница уходит из вида (см. flushOnHide ниже). Без этого второго
+     пути возможен реальный сценарий потери отметки: человек поставил
+     галочку и в первую секунду (пока ждёт отложенных 900 мс) свернул
+     приложение или переключился на другое — таймер в фоне может не
+     успеть сработать вовремя на части браузеров, и локально сохранённая
+     отметка так и останется локальной, пока кто-то не откроет
+     приложение снова или не нажмёт «Выгрузить» вручную. */
+  function flushSave() {
+    clearTimeout(saveTimer);
+    PCLog.info('Сохраняю изменения на Диск…');
+    Storage.push(state).then(function (r) {
+      if (r && r.synced) {
+        PCLog.info('Сохранено на Диск');
+        setCfgStatus('Выгружено на Яндекс.Диск', 'ok');
+        setSyncDot('ok');
+      } else {
+        setSyncDot('local');
+      }
+    }).catch(function (e) {
+      PCLog.error('Не удалось сохранить на Диск: ' + e.message);
+      setCfgStatus(e.message, 'err');
+      setSyncDot('err');
+    });
+  }
+
+  /* Если есть несохранённые изменения (точка ещё жёлтая — "pending") и
+     страница уходит из вида — досылаем немедленно, не дожидаясь
+     истечения обычной задержки. visibilitychange срабатывает надёжнее
+     pagehide на iOS Safari при сворачивании (не полном закрытии). */
+  function flushOnHide() {
+    if ($('#sync-dot').classList.contains('pending')) flushSave();
   }
 
   function setSyncDot(state) {
@@ -229,10 +249,17 @@
       if (t.mult > 1) badges += '<span class="badge mult' + (t.mult >= 4 ? ' m4' : t.mult === 3 ? ' m3' : '') + '">Отработка ×' + t.mult + '</span>';
       if (st) badges += ' <span class="badge ' + st + '">' + LABEL[st] + '</span>';
 
+      var repsLine = gone
+        ? '<span class="ex">вышел из челленджа</span>'
+        : '<b>' + t.reps + '</b> <span class="ex">' + EXNAME[t.ex] + (t.mult > 1 ? ' (' + t.base + '×' + t.mult + ')' : '') + '</span>';
+
       var body =
-        '<div class="head"><div class="name">' + p.name + '</div><div>' + badges + '</div></div>' +
-        '<div class="task"><div class="reps">' + (gone ? '—' : t.reps) + '</div>' +
-        '<div class="ex">' + (gone ? 'вышел из челленджа' : EXNAME[t.ex] + (t.mult > 1 ? ' (' + t.base + ' × ' + t.mult + ')' : '')) + '</div></div>';
+        '<div class="head">' +
+          '<div class="name">' + p.name + '</div>' +
+          '<div class="stat">' + (badges ? '<div class="badges-inline">' + badges + '</div>' : '') +
+            '<div class="reps-line">' + repsLine + '</div>' +
+          '</div>' +
+        '</div>';
 
       if (!gone) {
         var mine = p.id === myId();
@@ -240,8 +267,6 @@
           return '<button data-p="' + p.id + '" data-s="' + s + '" ' + (mine ? '' : 'disabled') + ' class="' + (st === s ? 'sel s-' + s : '') + '">' +
                  '<span class="g">' + GLYPH[s] + '</span>' + LABEL[s] + '</button>';
         }).join('') + '</div>';
-        if (!mine) body += '<div class="hint">Отмечает только ' + p.name + '.</div>';
-
         var hints = [];
         if (t.mult > 1) hints.push('<span class="warn">Отработка за ' + (t.mult - 1) + ' ' + plural(t.mult - 1, 'признанный', 'признанных', 'признанных') + ' ' + plural(t.mult - 1, 'день', 'дня', 'дней') + ' форс-мажора.</span>');
         if (st === 'alt' || used) {
@@ -295,7 +320,7 @@
         var inner = v.thumb ? '<img src="' + v.thumb + '" alt="">' : '▶';
         var reps = v.reps ? '<span class="vid-reps">' + v.reps + '</span>' : '';
         var del = v.participantId === myId()
-          ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" title="Удалить">✕</button>'
+          ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" data-delname="' + p.name + '" data-deldate="' + shortDate(v.date) + '" title="Удалить видео">🗑</button>'
           : '';
         return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
                inner + reps + '</button>' + del + '</div>';
@@ -320,7 +345,8 @@
     host.querySelectorAll('[data-del]').forEach(function (b) {
       b.addEventListener('click', function (e) {
         e.stopPropagation();
-        if (!confirm('Удалить это видео без возможности восстановления?')) return;
+        var msg = 'Удалить видео ' + b.dataset.delname + ' за ' + b.dataset.deldate + '?\nЭто нельзя отменить — файл сотрётся из облака навсегда.';
+        if (!confirm(msg)) return;
         var path = b.dataset.del, id = b.dataset.delid;
         b.disabled = true;
         Storage.video.deleteVideo(path, id).then(function () {
@@ -525,7 +551,7 @@
     var originalKb = Math.round(file.size / 1024);
     $('#rec-timer').hidden = false;
     $('#rec-timer').textContent = 'обработка…';
-    $('#rec-msg').textContent = 'Сжимаю видео из галереи (' + (originalKb / 1024).toFixed(1) + ' МБ) — так загрузится быстрее.';
+    $('#rec-msg').textContent = 'Сжимаю видео из галереи (' + (originalKb / 1024).toFixed(1) + ' МБ) — займёт примерно столько же времени, сколько длится сам ролик, это не зависание.';
 
     PCVideo.compressFile(
       file,
@@ -1043,9 +1069,25 @@
       markChatRead();
       renderChat();
       startChatPolling();
+      scrollChatToBottom();
     } else {
       stopChatPolling();
     }
+  }
+
+  /* Отдельная функция, а не часть renderChat(): нужно гарантированно
+     долистать в самый низ именно в момент ОТКРЫТИЯ вкладки, а не
+     полагаться на эвристику "прокрутка уже была внизу" — при первом
+     показе вкладки контейнер только что стал видимым, и его текущие
+     scrollHeight/scrollTop ещё не отражают реальную раскладку. Двойной
+     rAF — layout успевает посчитаться перед тем, как прокручиваем. */
+  function scrollChatToBottom() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        var log = $('#chat-log');
+        if (log) log.scrollTop = log.scrollHeight;
+      });
+    });
   }
 
   function bind() {
@@ -1249,9 +1291,11 @@
 
     if (!myId()) openIdentityGate();
 
-    /* если день сменился, пока приложение висело в фоне */
+    /* если день сменился, пока приложение висело в фоне; и досылаем
+       несохранённые изменения, если страница как раз в этот момент
+       уходит из вида (см. flushOnHide) */
     document.addEventListener('visibilitychange', function () {
-      if (document.hidden) return;
+      if (document.hidden) { flushOnHide(); return; }
       if (cursor > today()) cursor = today();
       render();
       refreshVideoIndex();
@@ -1266,6 +1310,10 @@
         if (merged !== state) { state = merged; render(); }
       }).catch(function () {});
     });
+    /* Запасной путь: на части браузеров при полном закрытии страницы
+       visibilitychange может не успеть, а pagehide — более надёжный
+       последний шанс досохранить. */
+    window.addEventListener('pagehide', flushOnHide);
 
     Storage.pull().then(function (remote) {
       if (!remote) return;
