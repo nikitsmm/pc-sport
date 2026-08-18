@@ -753,7 +753,9 @@
     }
 
     var log = $('#chat-log');
-    var wasAtBottom = (log.scrollHeight - log.scrollTop - log.clientHeight) < 60;
+    /* Тот же нюанс, что и в scrollChatToBottom(): у #chat-log нет
+       своего overflow, скроллится вся страница (окно), не div. */
+    var wasAtBottom = (document.body.scrollHeight - window.scrollY - window.innerHeight) < 80;
 
     var lastDay = '';
     log.innerHTML = chatMessages.map(function (m) {
@@ -769,7 +771,7 @@
         '<div class="t">' + time + (m.pending ? ' · отправка…' : '') + '</div></div>';
     }).join('');
 
-    if (wasAtBottom) log.scrollTop = log.scrollHeight;
+    if (wasAtBottom) window.scrollTo(0, document.body.scrollHeight);
   }
 
   function esc(s) {
@@ -860,8 +862,7 @@
     var optimistic = { id: tempId, participantId: myId, text: text, at: new Date().toISOString(), pending: true };
     chatMessages.push(optimistic);
     renderChat();
-    var log = $('#chat-log');
-    if (log) log.scrollTop = log.scrollHeight;
+    window.scrollTo(0, document.body.scrollHeight);
     return Storage.chat.send(myId, text).then(function (msg) {
       chatMessages = chatMessages.filter(function (m) { return m.id !== tempId; });
       chatMerge([msg]);
@@ -1084,8 +1085,12 @@
   function scrollChatToBottom() {
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
-        var log = $('#chat-log');
-        if (log) log.scrollTop = log.scrollHeight;
+        /* У #chat-log нет своего overflow — как и везде в приложении,
+           скроллится вся страница целиком (body), не отдельный div.
+           Раньше здесь стояло log.scrollTop = log.scrollHeight — это
+           no-op на нескроллящемся элементе, поэтому прокрутка вниз не
+           срабатывала вообще. */
+        window.scrollTo(0, document.body.scrollHeight);
       });
     });
   }
