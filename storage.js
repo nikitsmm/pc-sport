@@ -29,6 +29,7 @@
   var LS_STATE = 'pcsport.state';
   var LS_CFG = 'pcsport.config';
   var LS_MYID = 'pcsport.myId';
+  var LS_MYID_EVER = 'pcsport.myIdEverSet';
   var LS_CHAT_CACHE = 'pcsport.chatCache';
 
   /* ---------- безопасный localStorage (не падаем в песочницах) ---------- */
@@ -102,13 +103,92 @@
     throw lastErr;
   }
 
+  /* ============================================================
+     Надёжная очередь загрузки видео (IndexedDB).
+
+     Цель — то же самое, что у Telegram/WhatsApp: если сеть оборвалась
+     посреди отправки, запись не теряется и не требует новой съёмки.
+     Blob кладётся в IndexedDB ДО первой попытки заливки и удаляется
+     оттуда только после подтверждённого успеха — переживает даже
+     полное закрытие вкладки/приложения, не только временный сбой сети.
+     ============================================================ */
+  var DB_NAME = 'pcsport';
+  var DB_STORE = 'pendingVideos';
+
+  function idbOpen() {
+    return new Promise(function (resolve, reject) {
+      if (!global.indexedDB) { reject(new Error('IndexedDB недоступен')); return; }
+      var req = global.indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore(DB_STORE, { keyPath: 'id' }); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+  function idbPut(record) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(DB_STORE, 'readwrite');
+        tx.objectStore(DB_STORE).put(record);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+  function idbDelete(id) {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(DB_STORE, 'readwrite');
+        tx.objectStore(DB_STORE).delete(id);
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+  function idbGetAll() {
+    return idbOpen().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(DB_STORE, 'readonly');
+        var req = tx.objectStore(DB_STORE).getAll();
+        req.onsuccess = function () { resolve(req.result || []); };
+        req.onerror = function () { reject(req.error); };
+      });
+    });
+  }
+
+  /* Один PUT-запрос, вынесен отдельно, чтобы вызывать его в цикле повторов. */
+  function putOnce(uploadUrl, contentType, blob, onProgress, onPhase) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('PUT', uploadUrl, true);
+      if (contentType) xhr.setRequestHeader('Content-Type', contentType);
+      xhr.upload.onprogress = function (e) {
+        if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total);
+        if (e.lengthComputable && e.loaded >= e.total && onPhase) onPhase('Файл отправлен, жду подтверждения…');
+      };
+      xhr.onload = function () {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error('Не удалось загрузить видео (HTTP ' + xhr.status + ')'));
+      };
+      xhr.onerror = function () { reject(new Error('Сеть прервалась во время загрузки видео')); };
+      xhr.send(blob);
+    });
+  }
+
   /* ---------- кто пишет с этого устройства ----------
      Своего логина в приложении нет (тот же принцип, что и у отметок
      дня, и у видео) — просто локальный выбор на телефоне, никуда не
-     синхронизируется, у каждого свой. */
+     синхронизируется, у каждого свой. По требованию — закрепляется:
+     обычным способом в интерфейсе её не поменять, только через явный
+     сброс в настройках. everSet НЕ сбрасывается вместе с самой
+     идентичностью — так можно отличить самый первый выбор на этом
+     телефоне от повторного (после сброса), чтобы во втором случае
+     сообщение в чат звучало тревожнее. */
   var Identity = {
     read: function () { return LS.get(LS_MYID) || ''; },
-    write: function (id) { LS.set(LS_MYID, id || ''); }
+    write: function (id) { LS.set(LS_MYID, id || ''); },
+    everSet: function () { return LS.get(LS_MYID_EVER) === '1'; },
+    markEverSet: function () { LS.set(LS_MYID_EVER, '1'); },
+    reset: function () { LS.del(LS_MYID); } // LS_MYID_EVER остаётся — это и есть смысл
   };
 
   /* ============================================================
@@ -174,6 +254,11 @@
        нормально поддерживают Range для <video> и не ограничены размером
        файла — один и тот же путь работает для 5-секундного и
        минутного ролика.
+
+       Загрузка ниже дополнительно проходит через IndexedDB-очередь —
+       см. helpers idbOpen/idbPut/idbDelete/idbGetAll/putOnce выше по
+       файлу — если сеть оборвалась посреди отправки, blob не теряется
+       и не требует новой съёмки, переживает даже закрытие приложения.
        ============================================================ */
     video: {
       supported: function () {
@@ -182,51 +267,77 @@
       },
 
       /* onProgress(fraction 0..1) — по ходу отправки байт.
-         onPhase(text) — смена фазы (отправка → ждём ответ сервера →
-         записываем в индекс).
+         onPhase(text) — смена фазы (отправка → повтор при сбое сети →
+         ждём ответ сервера → записываем в индекс).
 
-         Возвращает { confirmed: bool }. Если PUT не прошёл — это
-         настоящая ошибка (throw), файл не ушёл никуда. Если PUT прошёл,
-         а confirm_upload после трёх попыток так и не подтвердился —
-         это НЕ потеря: файл уже физически в бакете, просто запись о нём
-         в общий список подтянется сама при следующем открытии «Видео
-         дня» (list_videos сверяется с реальным содержимым бакета). */
-      upload: async function (participantId, date, blob, ext, onProgress, onPhase) {
+         meta — необязательные { reps, thumb }.
+
+         Возвращает { confirmed: bool }. Сам PUT теперь повторяется до
+         3 раз при сетевом сбое, прежде чем считаться настоящей ошибкой
+         (throw) — «сеть прервалась» на мобильной сети сплошь и рядом
+         означает «попробуй ещё раз», а не «файл потерян». Blob лежит в
+         IndexedDB с самого начала попытки — если и три повтора не
+         помогут, запись останется в очереди и её можно будет дозалить
+         из pending()/resumePending() позже, даже после закрытия
+         приложения, без новой съёмки.
+
+         Если сам PUT прошёл, а confirm_upload после трёх попыток так и
+         не подтвердился — это НЕ потеря: файл уже физически в бакете,
+         запись о нём в общий список подтянется сама при следующем
+         открытии «Видео дня» (list_videos сверяется с бакетом). */
+      upload: async function (participantId, date, blob, ext, onProgress, onPhase, meta) {
+        meta = meta || {};
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) {
           throw new Error('Видео можно отправлять только при включённой облачной синхронизации');
         }
-        var meta = await api(cfg.url, 'get_upload_url', { participantId: participantId, date: date, ext: ext });
 
-        await new Promise(function (resolve, reject) {
-          var xhr = new XMLHttpRequest();
-          xhr.open('PUT', meta.uploadUrl, true);
-          /* Важно: Content-Type должен совпадать с тем, что подписано на
-             бэкенде при выдаче presigned-ссылки — иначе Object Storage
-             отклонит запрос как несовпадающий с подписью. */
-          if (meta.contentType) xhr.setRequestHeader('Content-Type', meta.contentType);
-          xhr.upload.onprogress = function (e) {
-            if (onProgress && e.lengthComputable) onProgress(e.loaded / e.total);
-            if (e.lengthComputable && e.loaded >= e.total && onPhase) onPhase('Файл отправлен, жду подтверждения…');
-          };
-          xhr.onload = function () {
-            if (xhr.status >= 200 && xhr.status < 300) resolve();
-            else reject(new Error('Не удалось загрузить видео (HTTP ' + xhr.status + ')'));
-          };
-          xhr.onerror = function () { reject(new Error('Сеть прервалась во время загрузки видео')); };
-          xhr.send(blob);
-        });
+        var pendingId = meta.pendingId || ('pv-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+        try {
+          await idbPut({
+            id: pendingId, participantId: participantId, date: date, ext: ext, blob: blob,
+            reps: meta.reps || null, thumb: meta.thumb || null, createdAt: Date.now()
+          });
+        } catch (e) { /* IndexedDB недоступен — грузим без страховки на закрытие приложения */ }
+
+        var upMeta = await api(cfg.url, 'get_upload_url', { participantId: participantId, date: date, ext: ext });
+
+        var attempts = 3, lastErr = null;
+        for (var i = 0; i < attempts; i++) {
+          try {
+            await putOnce(upMeta.uploadUrl, upMeta.contentType, blob, onProgress, onPhase);
+            lastErr = null;
+            break;
+          } catch (e) {
+            lastErr = e;
+            if (i < attempts - 1) {
+              if (onPhase) onPhase('Сеть подвела — пробую снова (' + (i + 2) + '/' + attempts + ')…');
+              await wait(2000 * (i + 1));
+            }
+          }
+        }
+        if (lastErr) throw lastErr; // запись остаётся в IndexedDB — можно дозалить позже
 
         if (onPhase) onPhase('Записываю в общий список видео…');
+        var confirmed = true;
         try {
           await apiRetry(cfg.url, 'confirm_upload', {
-            participantId: participantId, date: date, videoId: meta.videoId, path: meta.path, ext: ext, size: blob.size
+            participantId: participantId, date: date, videoId: upMeta.videoId, path: upMeta.path, ext: ext,
+            size: blob.size, reps: meta.reps || null, thumb: meta.thumb || null
           }, 3);
-          return { confirmed: true };
-        } catch (e) {
-          return { confirmed: false };
-        }
+        } catch (e) { confirmed = false; }
+
+        try { await idbDelete(pendingId); } catch (e) {}
+        return { confirmed: confirmed };
       },
+
+      /* Список ещё не отправленных роликов — например, после того как
+         приложение закрыли посреди обрыва сети. */
+      pending: function () { return idbGetAll().catch(function () { return []; }); },
+
+      /* Убрать из очереди без отправки — например, если решили
+         пересобрать заново, не досылать старую попытку. */
+      dropPending: function (id) { return idbDelete(id).catch(function () {}); },
 
       list: async function () {
         var cfg = Config.read();
@@ -250,6 +361,12 @@
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
         var d = await api(cfg.url, 'get_download_url', { path: path });
         return { url: d.url };
+      },
+
+      deleteVideo: async function (path, videoId) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        return apiRetry(cfg.url, 'delete_video', { path: path, videoId: videoId }, 3);
       }
     },
 

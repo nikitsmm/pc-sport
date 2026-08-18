@@ -235,10 +235,12 @@
         '<div class="ex">' + (gone ? 'вышел из челленджа' : EXNAME[t.ex] + (t.mult > 1 ? ' (' + t.base + ' × ' + t.mult + ')' : '')) + '</div></div>';
 
       if (!gone) {
+        var mine = p.id === myId();
         body += '<div class="status-row">' + STATUSES.map(function (s) {
-          return '<button data-p="' + p.id + '" data-s="' + s + '" class="' + (st === s ? 'sel s-' + s : '') + '">' +
+          return '<button data-p="' + p.id + '" data-s="' + s + '" ' + (mine ? '' : 'disabled') + ' class="' + (st === s ? 'sel s-' + s : '') + '">' +
                  '<span class="g">' + GLYPH[s] + '</span>' + LABEL[s] + '</button>';
         }).join('') + '</div>';
+        if (!mine) body += '<div class="hint">Отмечает только ' + p.name + '.</div>';
 
         var hints = [];
         if (t.mult > 1) hints.push('<span class="warn">Отработка за ' + (t.mult - 1) + ' ' + plural(t.mult - 1, 'признанный', 'признанных', 'признанных') + ' ' + plural(t.mult - 1, 'день', 'дня', 'дней') + ' форс-мажора.</span>');
@@ -257,6 +259,7 @@
 
     host.querySelectorAll('.status-row button').forEach(function (b) {
       b.addEventListener('click', function () {
+        if (b.dataset.p !== myId()) return;
         var p = state.participants.filter(function (x) { return x.id === b.dataset.p; })[0];
         setStatus(p, cursor, statusOf(p, cursor) === b.dataset.s ? null : b.dataset.s);
       });
@@ -289,9 +292,15 @@
       var gone = !activeOn(p, date);
       var clips = videoIndex.items.filter(function (v) { return v.participantId === p.id && v.date === date; });
       var thumbs = clips.map(function (v) {
-        return '<button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" title="Смотреть">▶</button>';
+        var inner = v.thumb ? '<img src="' + v.thumb + '" alt="">' : '▶';
+        var reps = v.reps ? '<span class="vid-reps">' + v.reps + '</span>' : '';
+        var del = v.participantId === myId()
+          ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" title="Удалить">✕</button>'
+          : '';
+        return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
+               inner + reps + '</button>' + del + '</div>';
       }).join('');
-      var addBtn = (!gone && canRecord)
+      var addBtn = (!gone && canRecord && p.id === myId())
         ? '<button class="vid-add" data-rec="' + p.id + '" title="Записать видео">＋</button>'
         : '';
       return '<div class="vid-row"><div class="who">' + p.name + '</div><div class="clips">' + thumbs + addBtn + '</div></div>';
@@ -306,7 +315,23 @@
       b.addEventListener('click', function () { openRecorder(b.dataset.rec); });
     });
     host.querySelectorAll('[data-play]').forEach(function (b) {
-      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who); });
+      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who, b.dataset.reps); });
+    });
+    host.querySelectorAll('[data-del]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!confirm('Удалить это видео без возможности восстановления?')) return;
+        var path = b.dataset.del, id = b.dataset.delid;
+        b.disabled = true;
+        Storage.video.deleteVideo(path, id).then(function () {
+          PCLog.info('Видео удалено: ' + id);
+          refreshVideoIndex();
+        }).catch(function (e) {
+          PCLog.error('Не удалось удалить видео: ' + e.message);
+          alert('Не удалось удалить: ' + e.message);
+          b.disabled = false;
+        });
+      });
     });
   }
 
@@ -321,8 +346,31 @@
     }).catch(function () { /* тихо: список не критичен для остального интерфейса */ });
   }
 
+  /* Видео, которые не долетели до облака даже после повторов и остались
+     в очереди IndexedDB (например, приложение закрыли посреди обрыва
+     сети) — при следующем запуске молча пытаемся дозалить сами, без
+     необходимости пересъёмки. */
+  function resumePendingVideos() {
+    if (!Storage.video.supported()) return;
+    Storage.video.pending().then(function (items) {
+      if (!items.length) return;
+      PCLog.info('В очереди ' + items.length + ' ' + plural(items.length, 'недозагруженное видео', 'недозагруженных видео', 'недозагруженных видео') + ' — пробую дозалить');
+      items.forEach(function (item) {
+        Storage.video.upload(item.participantId, item.date, item.blob, item.ext, null, null, {
+          reps: item.reps, thumb: item.thumb, pendingId: item.id
+        }).then(function (r) {
+          PCLog.info('Дозагрузка из очереди успешна: ' + item.id + ' (confirmed=' + r.confirmed + ')');
+          refreshVideoIndex();
+        }).catch(function (e) {
+          PCLog.warn('Дозагрузка из очереди опять не удалась (' + item.id + '): ' + e.message + ' — останется в очереди, попробуем в следующий раз');
+        });
+      });
+    }).catch(function () {});
+  }
+
   /* ---------- запись ---------- */
   function openRecorder(participantId) {
+    if (participantId !== myId()) return;
     var p = state.participants.filter(function (x) { return x.id === participantId; })[0];
     if (!p) return;
     recSession = { participantId: participantId, date: cursor, facing: 'environment', recording: false };
@@ -335,6 +383,9 @@
     $('#rec-timer').hidden = true;
     $('#rec-live-controls').hidden = false;
     $('#rec-controls-preview').hidden = true;
+    $('#rec-controls-savefail').hidden = true;
+    $('#rec-reps-row').hidden = true;
+    $('#rec-reps').value = '';
     setToggleIdle();
     $('#rec-toggle').disabled = true;
     $('#rec-flip').disabled = true;
@@ -398,8 +449,12 @@
   function showRecordedPreview(blob, ext) {
     recSession.blob = blob;
     recSession.ext = ext;
+    recSession.thumb = null;
     $('#rec-live-controls').hidden = true;
     $('#rec-controls-preview').hidden = false;
+    $('#rec-controls-savefail').hidden = true;
+    $('#rec-reps-row').hidden = false;
+    $('#rec-reps').value = '';
     var preview = $('#rec-preview');
     preview.hidden = false;
     preview.src = URL.createObjectURL(blob);
@@ -407,6 +462,30 @@
     var sizeStr = sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' МБ' : sizeKb + ' КБ';
     var warn = sizeKb > 15 * 1024 ? ' Файл тяжёлый — загрузка может занять время.' : '';
     $('#rec-msg').textContent = 'Готово, ' + sizeStr + '.' + warn;
+    grabThumbnail(preview);
+  }
+
+  /* Мини-превью для списка «Видео дня» — кадр из самого ролика,
+     ужатый до маленькой JPEG-картинки, хранится прямо в записи индекса
+     (десятки КБ, отдельная загрузка в S3 не нужна). Best-effort: если
+     на каком-то устройстве не получится (редко, но бывает) — просто
+     останется без миниатюры, значок «▶» как раньше. */
+  function grabThumbnail(videoEl) {
+    var done = false;
+    function capture() {
+      if (done) return;
+      try {
+        var w = 160, h = Math.round(160 * (videoEl.videoHeight / videoEl.videoWidth || 1.33));
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(videoEl, 0, 0, w, h);
+        recSession.thumb = canvas.toDataURL('image/jpeg', 0.55);
+        done = true;
+      } catch (e) { PCLog.warn('Миниатюра не собралась: ' + e.message); }
+    }
+    if (videoEl.readyState >= 2) capture();
+    else videoEl.addEventListener('loadeddata', capture, { once: true });
+    setTimeout(capture, 700); // запасной путь, если loadeddata почему-то не пришло
   }
 
   function openGalleryPicker() {
@@ -476,30 +555,40 @@
     preview.hidden = true;
     $('#rec-live').hidden = false;
     $('#rec-controls-preview').hidden = true;
+    $('#rec-controls-savefail').hidden = true;
+    $('#rec-reps-row').hidden = true;
+    $('#rec-reps').value = '';
     $('#rec-live-controls').hidden = false;
     $('#rec-flip').disabled = false;
     $('#rec-gallery').disabled = false;
     $('#rec-msg').textContent = '';
+    if (recSession) recSession.thumb = null;
   }
 
   function sendRecordingUI() {
     if (!recSession || !recSession.blob) return;
     var s = recSession;
     var who = participantName(s.participantId);
+    var repsVal = parseInt($('#rec-reps').value, 10);
+    var meta = { reps: (repsVal > 0 ? repsVal : null), thumb: s.thumb || null };
+
     $('#rec-controls-preview').hidden = true;
+    $('#rec-reps-row').hidden = true;
+    $('#rec-controls-savefail').hidden = true;
     $('#rec-msg').textContent = 'Отправляю… 0%';
 
-    PCLog.info('Видео: начинаю загрузку (' + who + ', ' + shortDate(s.date) + ', ' + Math.round(s.blob.size / 1024) + ' КБ)');
-    chatAnnounce(s.participantId, '🎥 Начал загрузку видео на Диск…');
+    PCLog.info('Видео: начинаю загрузку (' + who + ', ' + shortDate(s.date) + ', ' + Math.round(s.blob.size / 1024) + ' КБ' + (meta.reps ? ', ' + meta.reps + ' повт.' : '') + ')');
+    chatAnnounce(s.participantId, '🎥 Начал загрузку видео на Диск…' + (meta.reps ? ' (' + meta.reps + ' повт.)' : ''));
 
     var slowHint = setTimeout(function () {
-      $('#rec-msg').textContent += ' (Яндекс.Диску иногда нужно чуть больше времени на обработку — это ещё не зависание)';
+      $('#rec-msg').textContent += ' (сеть иногда даёт паузу — это не всегда зависание, идёт повтор)';
     }, 20000);
 
     Storage.video.upload(
       s.participantId, s.date, s.blob, s.ext,
       function (frac) { $('#rec-msg').textContent = 'Отправляю… ' + Math.round(frac * 100) + '%'; },
-      function (phase) { $('#rec-msg').textContent = phase; }
+      function (phase) { $('#rec-msg').textContent = phase; },
+      meta
     ).then(function (r) {
       clearTimeout(slowHint);
       $('#rec-msg').textContent = r.confirmed
@@ -513,16 +602,35 @@
       }, r.confirmed ? 500 : 1500);
     }).catch(function (e) {
       clearTimeout(slowHint);
-      $('#rec-msg').textContent = 'Не отправилось: ' + e.message;
-      $('#rec-controls-preview').hidden = false;
+      $('#rec-msg').textContent = 'Не отправилось после нескольких попыток: ' + e.message + '. Ролик никуда не делся — можно сохранить в галерею или попробовать ещё раз.';
+      $('#rec-controls-savefail').hidden = false;
       PCLog.error('Видео: загрузка не удалась (' + who + '): ' + e.message);
       chatAnnounce(s.participantId, '⚠️ Не получилось загрузить видео: ' + e.message);
     });
   }
 
+  /* Ролик не ушёл в облако даже после повторов — не теряем его.
+     На iOS/Android navigator.share с файлом обычно предлагает «Сохранить
+     в Фото»; если share недоступен — обычная ссылка на скачивание. */
+  function saveBlobToGallery(blob, filenameBase) {
+    var ext = recSession && recSession.ext || 'mp4';
+    var file = new File([blob], filenameBase + '.' + ext, { type: blob.type || ('video/' + ext) });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'Видео ПЦ Спорт' }).catch(function () {});
+      return;
+    }
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+  }
+
   /* ---------- просмотр ---------- */
-  function openPlayer(path, who) {
-    $('#play-who').textContent = who || '—';
+  function openPlayer(path, who, reps) {
+    $('#play-who').textContent = (who || '—') + (reps ? ' · ' + reps + ' повт.' : '');
     $('#play-video').src = '';
     $('#play-msg').textContent = 'Загружаю…';
     $('#play-fallback').href = '#';
@@ -564,6 +672,48 @@
     });
   }
 
+  /* «Кто я» — общая для всего приложения идентичность на этом
+     телефоне: отмечать дни и грузить видео можно только за себя. */
+  function myId() { return Storage.identity.read(); }
+
+  /* Закрепление идентичности. Обычным способом её потом не поменять —
+     только явный сброс в настройках, который сам себя объявляет в чат.
+     Здесь же — разница между первым выбором на этом телефоне и
+     повторным (после сброса): второе звучит тревожнее, это и есть цель. */
+  function commitIdentity(id) {
+    var p = state.participants.filter(function (x) { return x.id === id; })[0];
+    if (!p) return;
+    var wasEverSet = Storage.identity.everSet();
+
+    Storage.identity.write(id);
+    Storage.identity.markEverSet();
+    PCLog.info('Идентичность закреплена: ' + id + (wasEverSet ? ' (повторный выбор после сброса)' : ' (первый выбор)'));
+
+    $('#whoOverlay').classList.remove('on');
+    renderWhoBtn();
+    render();
+
+    var text = wasEverSet
+      ? '⚠️ На этом телефоне идентичность сбрасывали и выбрали заново: ' + p.name + '. Если это не ты — напиши в чат.'
+      : '🔒 ' + p.name + ' закрепил(а) за собой это устройство.';
+    chatAnnounce(id, text);
+  }
+
+  /* Модалка «Кто я» — всегда обязательная (без кнопки закрытия): пока
+     идентичность не выбрана, ничего в приложении не работает. */
+  function openIdentityGate() {
+    renderWhoPicker('#who-pick', myId(), commitIdentity);
+    $('#whoOverlay').classList.add('on');
+  }
+
+  function renderWhoBtn() {
+    var id = myId();
+    var btn = $('#who-btn');
+    var p = state.participants.filter(function (x) { return x.id === id; })[0];
+    btn.textContent = p ? p.name : 'Кто я?';
+    btn.classList.toggle('unset', !p);
+  }
+
   function renderChat() {
     var myId = Storage.identity.read();
     var known = state.participants.some(function (p) { return p.id === myId; });
@@ -572,11 +722,7 @@
     $('#chat-wrap').hidden = !known;
 
     if (!known) {
-      renderWhoPicker('#chat-who-pick', myId, function (id) {
-        Storage.identity.write(id);
-        PCLog.info('Выбрана идентичность в чате: ' + id);
-        renderChat();
-      });
+      renderWhoPicker('#chat-who-pick', myId, commitIdentity);
       return;
     }
 
@@ -730,7 +876,8 @@
       var cells = state.participants.map(function (p) {
         if (!activeOn(p, d)) return '<td><button disabled class="cell-none">·</button></td>';
         var st = statusOf(p, d);
-        return '<td><button data-p="' + p.id + '" data-d="' + d + '" class="cell-' + (st || 'none') + '">' +
+        var mine = p.id === myId();
+        return '<td><button data-p="' + p.id + '" data-d="' + d + '" ' + (mine ? '' : 'disabled') + ' class="cell-' + (st || 'none') + '">' +
                (st ? GLYPH[st] : '·') + '</button></td>';
       }).join('');
       rows.push('<tr class="' + (isWeekend(d) ? 'we' : '') + '"><td class="d">' + shortDate(d) + '</td>' + cells + '</tr>');
@@ -740,6 +887,7 @@
     table.innerHTML = head + '<tbody>' + rows.join('') + '</tbody>';
     table.querySelectorAll('button[data-p]').forEach(function (b) {
       b.addEventListener('click', function () {
+        if (b.dataset.p !== myId()) return;
         var p = state.participants.filter(function (x) { return x.id === b.dataset.p; })[0];
         var cur = statusOf(p, b.dataset.d);
         var next = CYCLE[(CYCLE.indexOf(cur) + 1) % CYCLE.length];
@@ -798,8 +946,29 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  function renderCfgWho() {
+    var host = $('#cfg-who-pick');
+    var id = myId();
+    var p = state.participants.filter(function (x) { return x.id === id; })[0];
+
+    if (!p) { renderWhoPicker('#cfg-who-pick', id, commitIdentity); return; }
+
+    host.innerHTML =
+      '<div class="who-locked-name">' + p.name + '</div>' +
+      '<button class="btn danger" id="cfg-who-reset" style="margin-top:12px">Сбросить идентичность</button>';
+    $('#cfg-who-reset').addEventListener('click', function () {
+      if (!confirm('Сбросить идентичность? В общий чат уйдёт сообщение об этом, и придётся выбирать заново.')) return;
+      Storage.identity.reset();
+      PCLog.warn('Идентичность сброшена вручную (' + p.name + ')');
+      renderWhoBtn();
+      renderCfgWho();
+      openIdentityGate();
+    });
+  }
+
   function renderCfg() {
     renderLogBox();
+    renderCfgWho();
     var cfg = Storage.config.read();
     $('#cfg-backend').value = cfg.backend;
     $('#cfg-url').value = cfg.url || '';
@@ -855,6 +1024,7 @@
      Общая отрисовка и навигация
      ============================================================ */
   function render() {
+    renderWhoBtn();
     renderToday();
     renderLog();
     renderMoney();
@@ -881,6 +1051,15 @@
   function bind() {
     document.querySelectorAll('[data-view]').forEach(function (b) {
       b.addEventListener('click', function () { show(b.dataset.view); });
+    });
+
+    $('#who-btn').addEventListener('click', function () {
+      var id = myId();
+      if (id) {
+        alert('Идентичность закреплена: ' + participantName(id) + '.\nСбросить можно в Настройках — это уйдёт сообщением в общий чат.');
+        return;
+      }
+      openIdentityGate();
     });
 
     $('#chat-form').addEventListener('submit', function (e) {
@@ -934,6 +1113,12 @@
     $('#rec-toggle').addEventListener('click', toggleRecordingUI);
     $('#rec-retake').addEventListener('click', retakeUI);
     $('#rec-send').addEventListener('click', sendRecordingUI);
+    $('#rec-save-gallery').addEventListener('click', function () {
+      if (!recSession || !recSession.blob) return;
+      saveBlobToGallery(recSession.blob, 'pc-sport-' + recSession.participantId + '-' + recSession.date);
+      PCLog.info('Видео сохранено в галерею вручную (после сбоя отправки)');
+    });
+    $('#rec-retry').addEventListener('click', sendRecordingUI);
     $('#rec-gallery').addEventListener('click', openGalleryPicker);
     $('#rec-file').addEventListener('change', function () {
       var f = this.files[0];
@@ -1062,12 +1247,15 @@
     tick();
     setInterval(tick, 1000);
 
+    if (!myId()) openIdentityGate();
+
     /* если день сменился, пока приложение висело в фоне */
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) return;
       if (cursor > today()) cursor = today();
       render();
       refreshVideoIndex();
+      resumePendingVideos();
       if (document.getElementById('v-chat').classList.contains('on')) {
         markChatRead();
         pollChat(false).then(renderChat);
@@ -1085,6 +1273,7 @@
       render();
     }).catch(function () {});
     refreshVideoIndex();
+    resumePendingVideos();
 
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {

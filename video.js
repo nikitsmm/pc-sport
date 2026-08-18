@@ -95,7 +95,15 @@
         onDone(blob, extFor(mime));
       };
 
-      rec.start();
+      /* Без аргумента здесь браузер копит ВСЕ данные видео внутри себя и
+         сбрасывает одним куском только в конце записи — на роликах
+         длиннее ~20 секунд это на части устройств (замечено на iPhone)
+         провоцирует известный баг MediaRecorder: видеодорожка начинает
+         терять кадры и "зависает" под давлением на внутренний буфер,
+         а аудио продолжает писаться нормально — картинка стоит, звук
+         идёт. Периодический сброс каждую секунду устраняет накопление
+         буфера и сам баг. */
+      rec.start(1000);
 
       var left = MAX_SECONDS;
       if (onTick) onTick(left);
@@ -228,7 +236,7 @@
           src.onended = finish;
           var hardStop = setTimeout(finish, limit * 1000 + 300);
 
-          rec.start();
+          rec.start(1000); // периодический сброс — та же причина, см. комментарий в startRecording()
           var playPromise = src.play();
           if (playPromise && playPromise.catch) {
             playPromise.catch(function (e) { fail(new Error('Браузер не разрешил обработку: ' + e.message)); });
