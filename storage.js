@@ -90,6 +90,27 @@
 
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+  /* Часы конкретного телефона отвечают за updatedAt/at при слиянии
+     состояния (см. merge() ниже) — если они убежали вперёд или сильно
+     отстали, это реальный источник багов (уже был случай, когда
+     устаревшая/будущая копия с одного телефона чуть не затёрла чужие
+     отметки при синхронизации). Сверяем при каждом обращении к серверу
+     и громко предупреждаем, если расхождение больше 3 минут — раньше,
+     чем это успеет что-то испортить, а не постфактум. Не чаще раза в
+     10 минут, чтобы не долбить логи на каждый чих. */
+  var lastSkewWarnAt = 0;
+  function checkClockSkew(serverTimeIso) {
+    if (!serverTimeIso || !global.PCLog) return;
+    var serverMs = Date.parse(serverTimeIso);
+    if (!serverMs) return;
+    var driftMs = Date.now() - serverMs;
+    var driftMin = Math.round(driftMs / 60000);
+    if (Math.abs(driftMin) >= 3 && Date.now() - lastSkewWarnAt > 10 * 60000) {
+      lastSkewWarnAt = Date.now();
+      PCLog.warn('Часы на этом телефоне расходятся с сервером на ' + driftMin + ' мин — проверь дату/время в настройках телефона, иначе синхронизация может повести себя странно.');
+    }
+  }
+
   /* Файл на Диск уже уехал к этому моменту — если сама запись в общий
      индекс (confirm_upload) споткнётся о кратковременный сбой сети,
      видео физически есть, но в приложении не появится. Несколько
@@ -210,7 +231,9 @@
     /* Проверка связи с функцией — используется в настройках. */
     check: async function (cfg) {
       cfg = cfg || Config.read();
-      return api(cfg.url, 'ping', {});
+      var r = await api(cfg.url, 'ping', {});
+      checkClockSkew(r && r.serverTime);
+      return r;
     },
 
     /* Забрать состояние из облака. Возвращает состояние или null. */
@@ -218,6 +241,7 @@
       var cfg = Config.read();
       if (cfg.backend !== 'cloud' || !cfg.url) return null;
       var data = await api(cfg.url, 'get_state', {});
+      checkClockSkew(data && data.serverTime);
       var remote = data && data.state ? data.state : null;
       if (remote) this.writeLocal(remote);
       return remote;
@@ -235,12 +259,79 @@
     /* Слияние: побеждает более свежий updatedAt.
        Для четырёх человек этого достаточно, разрешение конфликтов
        по отдельным дням не городим. */
+    /* Раньше здесь было "весь объект целиком, у кого updatedAt новее" —
+       и это оказалось по-настоящему опасно: updatedAt берётся из часов
+       конкретного телефона (new Date() на клиенте), а не с сервера.
+       Если на одном телефоне часы отстали/убежали вперёд, или на нём
+       просто долго не открывали приложение и там лежит старая
+       локальная копия — при следующей синхронизации эта старая копия
+       может "победить" свежие данные с чужих телефонов ЦЕЛИКОМ, а
+       потом при первом же собственном изменении на этом телефоне
+       затереть общее состояние на сервере — включая чужие отметки,
+       которые этот телефон вообще не трогал. Ровно так один раз и
+       произошло: устаревшая копия победила при слиянии, отметки
+       Антона/Артура/Коли пропали ещё на этапе открытия приложения, а
+       после того как на этом же телефоне поставили галочку себе —
+       эта версия (без чужих отметок) улетела на сервер и затёрла всё.
+
+       Починено: days сливаются по ОТДЕЛЬНОЙ ЗАПИСИ (дата+участник), не
+       по всему объекту разом. Даже если на одном телефоне часы совсем
+       не те — он может задеть максимум те ячейки, которые сам же и
+       редактировал, а не всё состояние целиком. Конфликт на ОДНОЙ и той
+       же ячейке (редкость — два человека одновременно поменяли статус
+       одного и того же человека в один день) решается по времени самой
+       записи (её собственное поле "at"), не по updatedAt всего объекта. */
     merge: function (localState, remoteState) {
       if (!remoteState) return localState;
       if (!localState) return remoteState;
+
+      var merged = JSON.parse(JSON.stringify(remoteState));
+      merged.days = {};
+
+      var dates = {};
+      Object.keys(localState.days || {}).forEach(function (d) { dates[d] = true; });
+      Object.keys(remoteState.days || {}).forEach(function (d) { dates[d] = true; });
+
+      Object.keys(dates).forEach(function (date) {
+        var l = (localState.days || {})[date] || {};
+        var r = (remoteState.days || {})[date] || {};
+        var pids = {};
+        Object.keys(l).forEach(function (id) { pids[id] = true; });
+        Object.keys(r).forEach(function (id) { pids[id] = true; });
+
+        var dayMerged = {};
+        Object.keys(pids).forEach(function (pid) {
+          var lRec = l[pid], rRec = r[pid];
+          if (lRec && rRec) {
+            var lt = Date.parse(lRec.at || 0) || 0;
+            var rt = Date.parse(rRec.at || 0) || 0;
+            dayMerged[pid] = lt >= rt ? lRec : rRec;
+          } else {
+            dayMerged[pid] = lRec || rRec;
+          }
+        });
+        if (Object.keys(dayMerged).length) merged.days[date] = dayMerged;
+      });
+
+      /* Список участников/норм и общие настройки (штраф, лимит альтернатив
+         и т.п.) меняются редко и почти никогда параллельно с чужого
+         телефона — для них пока оставлена более простая логика "берём
+         версию с телефона, где updatedAt свежее", риск ниже на порядок,
+         чем у days, где правки идут каждый день с четырёх телефонов
+         одновременно. */
       var l = Date.parse(localState.updatedAt || 0) || 0;
       var r = Date.parse(remoteState.updatedAt || 0) || 0;
-      return r > l ? remoteState : localState;
+      if (l > r) {
+        merged.participants = localState.participants;
+        merged.anchor = localState.anchor;
+        merged.fine = localState.fine;
+        merged.altLimit = localState.altLimit;
+        merged.maxMult = localState.maxMult;
+        merged.deadline = localState.deadline;
+      }
+
+      merged.updatedAt = new Date().toISOString();
+      return merged;
     },
 
     reset: function () { LS.del(LS_STATE); },
