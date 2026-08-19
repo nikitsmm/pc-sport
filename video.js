@@ -20,9 +20,19 @@
 
   var MAX_SECONDS = 60;       // жёсткий потолок длительности ролика (видео живёт в Object Storage —
                                // ограничения по размеру для надёжного проигрывания больше нет)
-  var TARGET_BITRATE = 700000; // ~700 кбит/с — для 35 сек это ~3 МБ
-  var TARGET_WIDTH = 480;
-  var TARGET_HEIGHT = 640;
+
+  /* Три уровня сжатия — выбирает человек перед записью/сжатием файла из
+     галереи. "Сильное" = меньше файл и ниже качество, "слабое" = крупнее
+     файл и выше качество. Названия — по силе СЖАТИЯ, не по качеству, это
+     важно не перепутать при выборе в интерфейсе. */
+  var QUALITY = {
+    strong: { width: 360, height: 480, bitrate: 350000, label: 'Сильное' },
+    medium: { width: 480, height: 640, bitrate: 700000, label: 'Среднее' },
+    weak: { width: 640, height: 854, bitrate: 1300000, label: 'Слабое' }
+  };
+  var DEFAULT_QUALITY = 'medium';
+
+  function qualityOf(key) { return QUALITY[key] || QUALITY[DEFAULT_QUALITY]; }
 
   function pickMimeType() {
     if (!global.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
@@ -53,14 +63,25 @@
       return !!(global.navigator && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && global.MediaRecorder);
     },
 
-    /* Открыть камеру. facing: 'user' (фронтальная) | 'environment' (основная). */
-    openCamera: function (facing) {
+    /* Список уровней сжатия для интерфейса — ключ + подпись. */
+    qualities: function () {
+      return Object.keys(QUALITY).map(function (k) { return { key: k, label: QUALITY[k].label }; });
+    },
+    defaultQuality: DEFAULT_QUALITY,
+
+    /* Открыть камеру. facing: 'user' (фронтальная) | 'environment' (основная).
+       qualityKey: 'strong' | 'medium' | 'weak' — влияет на разрешение,
+       которое запрашивается у камеры (битрейт применяется отдельно, в
+       startRecording, но разрешение нужно задать уже здесь). */
+    openCamera: function (facing, qualityKey) {
+      var q = qualityOf(qualityKey);
       var constraints = {
-        audio: true,
+        audio: true, // всегда запрашиваем — чтобы включить/выключить звук можно было
+                      // без повторного запроса разрешения камеры, см. setMic()
         video: {
           facingMode: facing || 'environment',
-          width: { ideal: TARGET_WIDTH },
-          height: { ideal: TARGET_HEIGHT },
+          width: { ideal: q.width },
+          height: { ideal: q.height },
           frameRate: { ideal: 24, max: 30 }
         }
       };
@@ -72,13 +93,25 @@
       stream.getTracks().forEach(function (t) { t.stop(); });
     },
 
+    /* Вкл/выкл звук у уже открытого потока — без повторного запроса
+       разрешений и без пересоздания камеры. Работает и до записи (для
+       переключателя в интерфейсе), и во время неё — MediaRecorder
+       уважает track.enabled динамически: выключенная дорожка пишется
+       тишиной, а не отсутствует вовсе. */
+    setMic: function (stream, enabled) {
+      if (!stream) return;
+      stream.getAudioTracks().forEach(function (t) { t.enabled = !!enabled; });
+    },
+
     /* Начать запись. onTick(secondsLeft) — раз в секунду, для таймера в UI.
-       onDone(blob, ext) — когда запись остановлена (вручную или по лимиту). */
-    startRecording: function (stream, onTick, onDone) {
+       onDone(blob, ext) — когда запись остановлена (вручную или по лимиту).
+       qualityKey — тот же уровень сжатия, что был передан в openCamera(). */
+    startRecording: function (stream, onTick, onDone, qualityKey) {
+      var q = qualityOf(qualityKey);
       var mime = pickMimeType();
       if (!mime) throw new Error('Браузер не умеет записывать видео (нет MediaRecorder)');
 
-      var opts = { mimeType: mime, videoBitsPerSecond: TARGET_BITRATE };
+      var opts = { mimeType: mime, videoBitsPerSecond: q.bitrate };
       var rec;
       try {
         rec = new MediaRecorder(stream, opts);
@@ -139,11 +172,12 @@
 
        onTick(secondsLeft) — примерная оценка, сколько ещё обрабатывать.
        onDone(blob, ext) / onError(err). */
-    compressFile: function (file, onTick, onDone, onError) {
+    compressFile: function (file, onTick, onDone, onError, qualityKey) {
       if (!file || !file.type || file.type.indexOf('video') !== 0) {
         onError(new Error('Выбранный файл — не видео'));
         return;
       }
+      var q = qualityOf(qualityKey);
 
       var src = document.createElement('video');
       src.muted = false;
@@ -162,9 +196,9 @@
 
       src.onloadedmetadata = function () {
         try {
-          var srcW = src.videoWidth || TARGET_WIDTH;
-          var srcH = src.videoHeight || TARGET_HEIGHT;
-          var maxSide = Math.max(TARGET_WIDTH, TARGET_HEIGHT);
+          var srcW = src.videoWidth || q.width;
+          var srcH = src.videoHeight || q.height;
+          var maxSide = Math.max(q.width, q.height);
           var scale = Math.min(1, maxSide / Math.max(srcW, srcH));
           var cw = Math.max(2, Math.round(srcW * scale));
           var ch = Math.max(2, Math.round(srcH * scale));
@@ -190,7 +224,7 @@
 
           var mime = pickMimeType();
           if (!mime) throw new Error('Браузер не умеет обрабатывать видео (нет MediaRecorder)');
-          var opts = { mimeType: mime, videoBitsPerSecond: TARGET_BITRATE };
+          var opts = { mimeType: mime, videoBitsPerSecond: q.bitrate };
           var rec;
           try { rec = new MediaRecorder(combined, opts); }
           catch (e) { rec = new MediaRecorder(combined, { mimeType: mime }); }
@@ -225,7 +259,7 @@
                битрейте — это десятки КБ. Пустой или крошечный результат
                значит, что сжатие не задалось (это уже случалось), а не
                что ролик был очень коротким. */
-            var minBytes = Math.max(8 * 1024, (TARGET_BITRATE / 8) * Math.min(limit, 1) * 0.3);
+            var minBytes = Math.max(8 * 1024, (q.bitrate / 8) * Math.min(limit, 1) * 0.3);
             if (blob.size < minBytes) {
               onError(new Error('Сжатие дало пустой результат (' + Math.round(blob.size / 1024) + ' КБ) — похоже на баг браузера'));
               return;

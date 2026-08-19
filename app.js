@@ -320,7 +320,7 @@
         var inner = v.thumb ? '<img src="' + v.thumb + '" alt="">' : '▶';
         var reps = v.reps ? '<span class="vid-reps">' + v.reps + '</span>' : '';
         var del = v.participantId === myId()
-          ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" data-delname="' + p.name + '" data-deldate="' + shortDate(v.date) + '" title="Удалить видео">🗑</button>'
+          ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" data-delname="' + p.name + '" data-deldate="' + shortDate(v.date) + '" title="Удалить видео">✕</button>'
           : '';
         return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
                inner + reps + '</button>' + del + '</div>';
@@ -395,11 +395,36 @@
   }
 
   /* ---------- запись ---------- */
+  var LS_QUALITY = 'pcsport.videoQuality';
+  function getQualityKey() {
+    try { return localStorage.getItem(LS_QUALITY) || PCVideo.defaultQuality; }
+    catch (e) { return PCVideo.defaultQuality; }
+  }
+  function setQualityKey(key) {
+    try { localStorage.setItem(LS_QUALITY, key); } catch (e) {}
+  }
+
+  function renderQualityPicker() {
+    var host = $('#rec-quality-pick');
+    var cur = getQualityKey();
+    host.innerHTML = PCVideo.qualities().map(function (q) {
+      return '<button data-q="' + q.key + '" class="' + (q.key === cur ? 'on' : '') + '">' + q.label + '</button>';
+    }).join('');
+    host.querySelectorAll('button').forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (recSession && recSession.recording) return; // не меняем на ходу записи
+        setQualityKey(b.dataset.q);
+        renderQualityPicker();
+        PCLog.info('Качество записи: ' + b.dataset.q);
+      });
+    });
+  }
+
   function openRecorder(participantId) {
     if (participantId !== myId()) return;
     var p = state.participants.filter(function (x) { return x.id === participantId; })[0];
     if (!p) return;
-    recSession = { participantId: participantId, date: cursor, facing: 'environment', recording: false };
+    recSession = { participantId: participantId, date: cursor, facing: 'environment', recording: false, micOn: true };
 
     $('#rec-who').textContent = p.name + ' · ' + shortDate(cursor);
     $('#rec-msg').textContent = '';
@@ -408,6 +433,7 @@
     $('#rec-preview').src = '';
     $('#rec-timer').hidden = true;
     $('#rec-live-controls').hidden = false;
+    $('#rec-settings-row').hidden = false;
     $('#rec-controls-preview').hidden = true;
     $('#rec-controls-savefail').hidden = true;
     $('#rec-reps-row').hidden = true;
@@ -416,10 +442,14 @@
     $('#rec-toggle').disabled = true;
     $('#rec-flip').disabled = true;
     $('#rec-gallery').disabled = false;
+    $('#rec-mic').classList.add('on');
+    $('#rec-mic').classList.remove('off');
+    $('#rec-mic').textContent = '🎤 Звук: вкл';
+    renderQualityPicker();
 
     $('#recOverlay').classList.add('on');
 
-    PCVideo.openCamera(recSession.facing).then(function (stream) {
+    PCVideo.openCamera(recSession.facing, getQualityKey()).then(function (stream) {
       recSession.stream = stream;
       $('#rec-live').srcObject = stream;
       $('#rec-toggle').disabled = false;
@@ -455,6 +485,7 @@
     $('#rec-flip').disabled = true;
     $('#rec-gallery').disabled = true;
     $('#rec-timer').hidden = false;
+    $('#rec-settings-row').hidden = true;
 
     recSession.ctrl = PCVideo.startRecording(
       recSession.stream,
@@ -465,7 +496,8 @@
         $('#rec-timer').hidden = true;
         setToggleIdle();
         showRecordedPreview(blob, ext);
-      }
+      },
+      getQualityKey()
     );
   }
 
@@ -477,6 +509,7 @@
     recSession.ext = ext;
     recSession.thumb = null;
     $('#rec-live-controls').hidden = true;
+    $('#rec-settings-row').hidden = true;
     $('#rec-controls-preview').hidden = false;
     $('#rec-controls-savefail').hidden = true;
     $('#rec-reps-row').hidden = false;
@@ -570,7 +603,8 @@
         $('#rec-timer').hidden = true;
         showRecordedPreview(file, extForMime(file.type));
         $('#rec-msg').textContent = 'Не получилось сжать — отправлю как есть, может занять больше времени.';
-      }
+      },
+      getQualityKey()
     );
   }
 
@@ -585,6 +619,7 @@
     $('#rec-reps-row').hidden = true;
     $('#rec-reps').value = '';
     $('#rec-live-controls').hidden = false;
+    $('#rec-settings-row').hidden = false;
     $('#rec-flip').disabled = false;
     $('#rec-gallery').disabled = false;
     $('#rec-msg').textContent = '';
@@ -597,6 +632,24 @@
     var who = participantName(s.participantId);
     var repsVal = parseInt($('#rec-reps').value, 10);
     var meta = { reps: (repsVal > 0 ? repsVal : null), thumb: s.thumb || null };
+
+    /* Норма уже известна приложению (та же task(), что считает число на
+       карточке «Сегодня», с учётом отработки после форс-мажора) —
+       раз человек всё равно вводит количество повторений к видео,
+       грех не сравнить и не предложить сразу закрыть день, вместо
+       того чтобы потом отдельно идти отмечать галочку руками. */
+    if (meta.reps) {
+      var p = state.participants.filter(function (x) { return x.id === s.participantId; })[0];
+      if (p && statusOf(p, s.date) !== 'done') {
+        var need = task(p, s.date).reps;
+        if (meta.reps >= need) {
+          if (confirm('Норма выполнена (' + meta.reps + ' из ' + need + ') — закрыть день как «Норма»?')) {
+            setStatus(p, s.date, 'done');
+            PCLog.info('Норма закрыта автоматически по видео: ' + who + ', ' + shortDate(s.date) + ' (' + meta.reps + '/' + need + ')');
+          }
+        }
+      }
+    }
 
     $('#rec-controls-preview').hidden = true;
     $('#rec-reps-row').hidden = true;
@@ -655,11 +708,30 @@
   }
 
   /* ---------- просмотр ---------- */
+  var SPEEDS = [0.5, 1, 1.5, 2];
+
+  function renderSpeedPicker() {
+    var host = $('#play-speed');
+    var v = $('#play-video');
+    host.innerHTML = SPEEDS.map(function (s) {
+      return '<button data-speed="' + s + '" class="' + (v.playbackRate === s ? 'on' : '') + '">' + (s === 1 ? '1×' : s + '×') + '</button>';
+    }).join('');
+    host.querySelectorAll('button').forEach(function (b) {
+      b.addEventListener('click', function () {
+        v.playbackRate = parseFloat(b.dataset.speed);
+        host.querySelectorAll('button').forEach(function (x) { x.classList.remove('on'); });
+        b.classList.add('on');
+      });
+    });
+  }
+
   function openPlayer(path, who, reps) {
     $('#play-who').textContent = (who || '—') + (reps ? ' · ' + reps + ' повт.' : '');
     $('#play-video').src = '';
+    $('#play-video').playbackRate = 1;
     $('#play-msg').textContent = 'Загружаю…';
     $('#play-fallback').href = '#';
+    renderSpeedPicker();
     $('#playOverlay').classList.add('on');
     Storage.video.playUrl(path).then(function (r) {
       $('#play-video').src = r.url;
@@ -674,6 +746,7 @@
     var v = $('#play-video');
     v.pause();
     v.src = '';
+    v.playbackRate = 1;
     $('#play-msg').textContent = '';
     $('#playOverlay').classList.remove('on');
   }
@@ -1175,14 +1248,26 @@
     $('#rec-flip').addEventListener('click', function () {
       if (!recSession || recSession.recording) return;
       var next = recSession.facing === 'user' ? 'environment' : 'user';
+      var micWas = recSession.micOn;
       PCVideo.closeCamera(recSession.stream);
       recSession.facing = next;
       $('#rec-toggle').disabled = true;
-      PCVideo.openCamera(next).then(function (stream) {
+      PCVideo.openCamera(next, getQualityKey()).then(function (stream) {
         recSession.stream = stream;
+        PCVideo.setMic(stream, micWas);
         $('#rec-live').srcObject = stream;
         $('#rec-toggle').disabled = false;
       }).catch(function (e) { $('#rec-msg').textContent = 'Нет доступа к камере: ' + e.message; });
+    });
+
+    $('#rec-mic').addEventListener('click', function () {
+      if (!recSession || !recSession.stream) return;
+      recSession.micOn = !recSession.micOn;
+      PCVideo.setMic(recSession.stream, recSession.micOn);
+      var btn = $('#rec-mic');
+      btn.classList.toggle('on', recSession.micOn);
+      btn.classList.toggle('off', !recSession.micOn);
+      btn.textContent = recSession.micOn ? '🎤 Звук: вкл' : '🔇 Звук: выкл';
     });
 
     $('#play-close').addEventListener('click', closePlayer);
