@@ -19,7 +19,7 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v31 · 17.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v33 · 17.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -60,7 +60,7 @@
     <div class="grid">
       <table class="log" id="log-table"></table>
     </div>
-    <p class="status-line">Нажатие на клетку переключает статус: пусто → норма → альтернатива → форс-мажор → пропуск.</p>
+    <p class="status-line">Только просмотр — отметки ставятся на вкладке «Сегодня».</p>
   </section>
 
   <!-- ================= СЧЁТ ================= -->
@@ -187,11 +187,17 @@
 
     <h2>Видео</h2>
     <div class="panel">
-      <p class="h">Список видео на вкладке «Сегодня» и так сверяется с Диском при каждом открытии — эта кнопка нужна, только если хочешь проверить прямо сейчас, ничего не дожидаясь.</p>
-      <div class="row" style="margin-top:12px">
-        <button class="btn ghost" id="cfg-sync-video" style="flex:1">Проверить видео на Диске</button>
+      <p class="h">Список видео на вкладке «Сегодня» и так сверяется с хранилищем при каждом открытии — «Проверить сейчас» нужна, только если не хочется ждать.</p>
+      <div class="row" style="margin-top:12px;gap:8px">
+        <button class="btn ghost" id="cfg-sync-video" style="flex:1">Проверить видео</button>
       </div>
       <div class="status-line" id="cfg-video-status"></div>
+
+      <p class="h" style="margin-top:16px">Видео хранятся <span id="cfg-retention-days">5</span> дней, потом должны удаляться сами по расписанию (Timer-триггер раз в сутки). Кнопка ниже запускает ту же очистку прямо сейчас — можно своими глазами убедиться, что старое реально удаляется, а не просто верить на слово.</p>
+      <div class="row" style="margin-top:10px;gap:8px">
+        <button class="btn ghost" id="cfg-cleanup-now" style="flex:1">Почистить старые видео сейчас</button>
+      </div>
+      <div class="status-line" id="cfg-cleanup-status"></div>
     </div>
 
     <h2>Данные</h2>
@@ -262,6 +268,7 @@
     </div>
     <div class="rec-controls" id="rec-controls-preview" hidden>
       <button class="btn cam" id="rec-retake">Ещё раз</button>
+      <button class="btn cam" id="rec-save-early" title="Сохранить копию в галерею на всякий случай">📥</button>
       <button class="btn" id="rec-send">Отправить</button>
     </div>
     <div class="rec-controls" id="rec-controls-savefail" hidden>

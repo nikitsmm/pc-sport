@@ -354,6 +354,15 @@
         return api(cfg.url, 'sync_videos', {});
       },
 
+      /* Ручной запуск того же действия, что обычно дёргает Timer-триггер
+         раз в сутки — чтобы можно было своими глазами убедиться, что
+         старые видео реально удаляются, а не просто верить на слово. */
+      cleanupNow: async function () {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        return apiRetry(cfg.url, 'cleanup_old', {}, 3);
+      },
+
       /* Возвращает { url }. Presigned-ссылка Object Storage — можно
          сразу отдавать в <video src>, Range поддерживается штатно. */
       playUrl: async function (path) {

@@ -101,7 +101,7 @@ table.log thead th{font-size:10px;letter-spacing:.05em;color:var(--steel);text-t
   border-bottom:2px solid var(--ink);padding:8px 4px;}
 table.log td.d{text-align:left;padding:0 8px;white-space:nowrap;color:var(--muted);font-size:11px;}
 table.log tr.we td.d{color:var(--signal);}
-table.log td button{width:100%;border:0;background:transparent;padding:11px 2px;font-size:14px;line-height:1;}
+table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-height:1;}
 .cell-done{color:var(--ok);} .cell-alt{color:var(--alt);} .cell-forgiven{color:var(--fm);}
 .cell-missed{color:var(--signal);} .cell-none{color:#C6CED5;}
 
@@ -196,6 +196,8 @@ table.log td button{width:100%;border:0;background:transparent;padding:11px 2px;
 .vid-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
 .vid-reps{position:absolute;bottom:1px;right:1px;background:rgba(16,23,30,.82);color:#fff;font-size:8px;
   font-family:"JetBrains Mono",monospace;font-weight:700;padding:1px 3px;line-height:1.3;}
+.vid-expiry{position:absolute;bottom:1px;left:1px;background:rgba(179,49,42,.88);color:#fff;font-size:7px;
+  font-family:"JetBrains Mono",monospace;font-weight:700;padding:1px 3px;line-height:1.3;text-transform:uppercase;}
 .vid-del{position:absolute;top:-7px;right:-7px;width:20px;height:20px;background:var(--signal);color:#fff;
   border:2px solid var(--card);border-radius:50%;font-size:11px;line-height:16px;text-align:center;padding:0;}
 .vid-add{background:transparent;border:1px dashed var(--rule);color:var(--steel);width:44px;height:44px;font-size:19px;flex-shrink:0;}

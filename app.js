@@ -23,7 +23,6 @@
   };
 
   var STATUSES = ['done', 'alt', 'forgiven', 'missed'];
-  var CYCLE = [null, 'done', 'alt', 'forgiven', 'missed'];
   var LABEL = { done: 'Норма', alt: 'Альт', forgiven: 'Форс', missed: 'Пропуск' };
   var GLYPH = { done: '✓', alt: '⇄', forgiven: '⚑', missed: '✕' };
   var EXNAME = { pullups: 'подтягиваний', pushups: 'отжиманий' };
@@ -319,11 +318,15 @@
       var thumbs = clips.map(function (v) {
         var inner = v.thumb ? '<img src="' + v.thumb + '" alt="">' : '▶';
         var reps = v.reps ? '<span class="vid-reps">' + v.reps + '</span>' : '';
+        var daysLeft = videoIndex.retentionDays ? videoIndex.retentionDays - diffDays(v.date, today()) : null;
+        var expiry = (daysLeft !== null && daysLeft <= 1)
+          ? '<span class="vid-expiry" title="Удалится по расписанию">' + (daysLeft <= 0 ? 'сегодня' : 'завтра') + '</span>'
+          : '';
         var del = v.participantId === myId()
           ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" data-delname="' + p.name + '" data-deldate="' + shortDate(v.date) + '" title="Удалить видео">✕</button>'
           : '';
         return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
-               inner + reps + '</button>' + del + '</div>';
+               inner + reps + expiry + '</button>' + del + '</div>';
       }).join('');
       var addBtn = (!gone && canRecord && p.id === myId())
         ? '<button class="vid-add" data-rec="' + p.id + '" title="Записать видео">＋</button>'
@@ -366,6 +369,9 @@
     return Storage.video.list().then(function (r) {
       videoIndex = r || { items: [], retentionDays: 0 };
       renderVideos();
+      if (videoIndex.retentionDays && $('#cfg-retention-days')) {
+        $('#cfg-retention-days').textContent = videoIndex.retentionDays;
+      }
       if (r && r.healed) {
         setCfgStatus('Досчитал ' + r.healed + ' ' + plural(r.healed, 'пропущенное видео', 'пропущенных видео', 'пропущенных видео') + ' с Диска', 'ok');
       }
@@ -593,8 +599,20 @@
         $('#rec-timer').hidden = true;
         showRecordedPreview(blob, ext);
         var newKb = Math.round(blob.size / 1024);
-        $('#rec-msg').textContent += ' Было ' + (originalKb > 1024 ? (originalKb / 1024).toFixed(1) + ' МБ' : originalKb + ' КБ') +
+        var ratio = blob.size / file.size;
+        var sizeMsg = ' Было ' + (originalKb > 1024 ? (originalKb / 1024).toFixed(1) + ' МБ' : originalKb + ' КБ') +
           ' → стало ' + (newKb > 1024 ? (newKb / 1024).toFixed(1) + ' МБ' : newKb + ' КБ') + '.';
+        /* Сжатие технически "прошло" (не пустой файл, не ошибка) — но
+           если размер почти не изменился, значит браузер на этом
+           устройстве не уважает заданный битрейт для canvas-потока так
+           же строго, как для потока с камеры (для живой записи это
+           проверено, для сжатия готового файла — другой путь, гарантии
+           той же нет). Честно предупреждаем, а не выдаём за успех. */
+        if (ratio > 0.6) {
+          sizeMsg += ' Сжатие почти не сработало на этом устройстве — файл всё равно тяжёлый, загрузка может занять время.';
+          PCLog.warn('Сжатие галереи почти не уменьшило файл: было ' + originalKb + ' КБ, стало ' + newKb + ' КБ (' + Math.round(ratio * 100) + '%)');
+        }
+        $('#rec-msg').textContent += sizeMsg;
       },
       function () {
         /* Сжатие не задалось — не теряем видео, отправляем как есть.
@@ -974,26 +992,15 @@
     for (var i = 0; i < days; i++) {
       var d = shift(t, -i);
       var cells = state.participants.map(function (p) {
-        if (!activeOn(p, d)) return '<td><button disabled class="cell-none">·</button></td>';
+        if (!activeOn(p, d)) return '<td><span class="cell-none">·</span></td>';
         var st = statusOf(p, d);
-        var mine = p.id === myId();
-        return '<td><button data-p="' + p.id + '" data-d="' + d + '" ' + (mine ? '' : 'disabled') + ' class="cell-' + (st || 'none') + '">' +
-               (st ? GLYPH[st] : '·') + '</button></td>';
+        return '<td><span class="cell-' + (st || 'none') + '">' + (st ? GLYPH[st] : '·') + '</span></td>';
       }).join('');
       rows.push('<tr class="' + (isWeekend(d) ? 'we' : '') + '"><td class="d">' + shortDate(d) + '</td>' + cells + '</tr>');
     }
 
     var table = $('#log-table');
     table.innerHTML = head + '<tbody>' + rows.join('') + '</tbody>';
-    table.querySelectorAll('button[data-p]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        if (b.dataset.p !== myId()) return;
-        var p = state.participants.filter(function (x) { return x.id === b.dataset.p; })[0];
-        var cur = statusOf(p, b.dataset.d);
-        var next = CYCLE[(CYCLE.indexOf(cur) + 1) % CYCLE.length];
-        setStatus(p, b.dataset.d, next);
-      });
-    });
   }
 
   /* ============================================================
@@ -1238,6 +1245,11 @@
       saveBlobToGallery(recSession.blob, 'pc-sport-' + recSession.participantId + '-' + recSession.date);
       PCLog.info('Видео сохранено в галерею вручную (после сбоя отправки)');
     });
+    $('#rec-save-early').addEventListener('click', function () {
+      if (!recSession || !recSession.blob) return;
+      saveBlobToGallery(recSession.blob, 'pc-sport-' + recSession.participantId + '-' + recSession.date);
+      PCLog.info('Видео сохранено в галерею вручную (до отправки, на всякий случай)');
+    });
     $('#rec-retry').addEventListener('click', sendRecordingUI);
     $('#rec-gallery').addEventListener('click', openGalleryPicker);
     $('#rec-file').addEventListener('change', function () {
@@ -1357,12 +1369,31 @@
       Storage.video.sync().then(function (r) {
         el.className = 'status-line ok';
         el.textContent = r.added
-          ? 'Досчитал ' + r.added + ' ' + plural(r.added, 'видео', 'видео', 'видео') + ' с Диска'
+          ? 'Досчитал ' + r.added + ' ' + plural(r.added, 'видео', 'видео', 'видео')
           : 'Всё совпадает, расхождений нет';
         refreshVideoIndex();
       }).catch(function (e) {
         el.className = 'status-line err';
         el.textContent = e.message;
+      });
+    });
+
+    $('#cfg-cleanup-now').addEventListener('click', function () {
+      var el = $('#cfg-cleanup-status');
+      el.className = 'status-line';
+      el.textContent = 'Проверяю и чищу…';
+      PCLog.info('Ручной запуск очистки старых видео');
+      Storage.video.cleanupNow().then(function (r) {
+        el.className = 'status-line ok';
+        el.textContent = r.removed
+          ? 'Удалено ' + r.removed + ' ' + plural(r.removed, 'старое видео', 'старых видео', 'старых видео') + ' — очистка реально работает'
+          : 'Нечего удалять — всё видео в пределах срока хранения';
+        PCLog.info('Ручная очистка: удалено ' + (r.removed || 0));
+        refreshVideoIndex();
+      }).catch(function (e) {
+        el.className = 'status-line err';
+        el.textContent = e.message;
+        PCLog.error('Ручная очистка не удалась: ' + e.message);
       });
     });
   }
