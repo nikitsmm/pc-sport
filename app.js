@@ -458,6 +458,7 @@
     PCVideo.openCamera(recSession.facing, getQualityKey()).then(function (stream) {
       recSession.stream = stream;
       $('#rec-live').srcObject = stream;
+      $('#rec-live').classList.toggle('mirror', recSession.facing === 'user');
       $('#rec-toggle').disabled = false;
       $('#rec-flip').disabled = false;
     }).catch(function (e) {
@@ -503,7 +504,8 @@
         setToggleIdle();
         showRecordedPreview(blob, ext);
       },
-      getQualityKey()
+      getQualityKey(),
+      recSession.facing
     );
   }
 
@@ -1268,6 +1270,7 @@
         recSession.stream = stream;
         PCVideo.setMic(stream, micWas);
         $('#rec-live').srcObject = stream;
+        $('#rec-live').classList.toggle('mirror', next === 'user');
         $('#rec-toggle').disabled = false;
       }).catch(function (e) { $('#rec-msg').textContent = 'Нет доступа к камере: ' + e.message; });
     });
@@ -1306,23 +1309,34 @@
         .catch(function (e) { setCfgStatus(e.message, 'err'); });
     });
 
-    $('#cfg-pull').addEventListener('click', function () {
-      setCfgStatus('Загружаю…');
-      Storage.pull().then(function (remote) {
-        if (!remote) { setCfgStatus('В облаке данных ещё нет — выгрузи текущие', 'err'); return; }
-        state = normalize(Storage.merge(state, remote));
-        Storage.writeLocal(state);
-        render();
-        setCfgStatus('Загружено из облака', 'ok');
-      }).catch(function (e) { setCfgStatus(e.message, 'err'); });
-    });
+    $('#ql-refresh').addEventListener('click', function () {
+      var btn = $('#ql-refresh');
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.classList.add('spinning');
+      setSyncDot('pending');
+      PCLog.info('Обновление вручную: выгружаю, затем подтягиваю свежее');
 
-    $('#cfg-push').addEventListener('click', function () {
-      setCfgStatus('Выгружаю…');
       state.updatedAt = new Date().toISOString();
-      Storage.push(state).then(function (r) {
-        setCfgStatus(r.synced ? 'Выгружено через облачную функцию' : 'Облако не настроено — сохранено локально', r.synced ? 'ok' : 'err');
-      }).catch(function (e) { setCfgStatus(e.message, 'err'); });
+      Storage.push(state).then(function () {
+        return Storage.pull();
+      }).then(function (remote) {
+        if (remote) {
+          state = normalize(Storage.merge(state, remote));
+          Storage.writeLocal(state);
+          render();
+        }
+        setSyncDot('ok');
+        setCfgStatus('Обновлено', 'ok');
+        PCLog.info('Обновление вручную: успешно');
+      }).catch(function (e) {
+        setSyncDot('err');
+        setCfgStatus(e.message, 'err');
+        PCLog.error('Обновление вручную не удалось: ' + e.message);
+      }).finally(function () {
+        btn.disabled = false;
+        btn.classList.remove('spinning');
+      });
     });
 
     $('#cfg-anchor').addEventListener('change', function () {

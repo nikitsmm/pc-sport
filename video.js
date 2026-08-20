@@ -105,18 +105,64 @@
 
     /* Начать запись. onTick(secondsLeft) — раз в секунду, для таймера в UI.
        onDone(blob, ext) — когда запись остановлена (вручную или по лимиту).
-       qualityKey — тот же уровень сжатия, что был передан в openCamera(). */
-    startRecording: function (stream, onTick, onDone, qualityKey) {
+       qualityKey — тот же уровень сжатия, что был передан в openCamera().
+       facing — 'user' | 'environment': на фронтальной камере запись
+       зеркалится по-настоящему, в самих пикселях (не только на экране
+       предпросмотра) — иначе поднятая правая рука на записи выглядит
+       поднятой левой, как оно физически видит камера, а не как в
+       зеркале, к которому все привыкли смотреть на себя. */
+    startRecording: function (stream, onTick, onDone, qualityKey, facing) {
       var q = qualityOf(qualityKey);
       var mime = pickMimeType();
       if (!mime) throw new Error('Браузер не умеет записывать видео (нет MediaRecorder)');
 
+      var recordStream = stream;
+      var mirrorCleanup = null;
+
+      if (facing === 'user') {
+        var settings = stream.getVideoTracks()[0].getSettings ? stream.getVideoTracks()[0].getSettings() : {};
+        var vw = settings.width || q.width;
+        var vh = settings.height || q.height;
+
+        var hiddenVideo = document.createElement('video');
+        hiddenVideo.muted = true;
+        hiddenVideo.playsInline = true;
+        hiddenVideo.srcObject = stream;
+        hiddenVideo.play().catch(function () {});
+
+        var canvas = document.createElement('canvas');
+        canvas.width = vw;
+        canvas.height = vh;
+        var ctx = canvas.getContext('2d');
+
+        var mirrorRAF = null;
+        (function drawMirrored() {
+          if (hiddenVideo.readyState >= 2) {
+            ctx.save();
+            ctx.translate(vw, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(hiddenVideo, 0, 0, vw, vh);
+            ctx.restore();
+          }
+          mirrorRAF = requestAnimationFrame(drawMirrored);
+        })();
+
+        var canvasStream = canvas.captureStream(24);
+        recordStream = new MediaStream(canvasStream.getVideoTracks().concat(stream.getAudioTracks()));
+
+        mirrorCleanup = function () {
+          cancelAnimationFrame(mirrorRAF);
+          hiddenVideo.pause();
+          hiddenVideo.srcObject = null;
+        };
+      }
+
       var opts = { mimeType: mime, videoBitsPerSecond: q.bitrate };
       var rec;
       try {
-        rec = new MediaRecorder(stream, opts);
+        rec = new MediaRecorder(recordStream, opts);
       } catch (e) {
-        rec = new MediaRecorder(stream, { mimeType: mime }); // на случай если браузер капризничает на опциях
+        rec = new MediaRecorder(recordStream, { mimeType: mime }); // на случай если браузер капризничает на опциях
       }
 
       var chunks = [];
@@ -124,6 +170,7 @@
       rec.onstop = function () {
         clearInterval(tickTimer);
         clearTimeout(hardStop);
+        if (mirrorCleanup) mirrorCleanup();
         var blob = new Blob(chunks, { type: mime });
         onDone(blob, extFor(mime));
       };

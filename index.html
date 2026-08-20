@@ -19,7 +19,7 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v34 · 17.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v35 · 17.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -42,6 +42,7 @@
     <div class="quicklinks">
       <button data-view="money" id="ql-money"><span class="g">₽</span><span id="ql-money-sum">Счёт</span></button>
       <button data-view="rules"><span class="g">§</span>Правила</button>
+      <button id="ql-refresh"><span class="g">↻</span>Обновить</button>
     </div>
     <div class="datebar">
       <button id="d-prev" aria-label="Предыдущий день">‹</button>
@@ -169,9 +170,8 @@
 
       <div class="row" style="margin-top:16px;flex-wrap:wrap;gap:8px">
         <button class="btn" id="cfg-save">Сохранить</button>
-        <button class="btn ghost" id="cfg-pull">Загрузить</button>
-        <button class="btn ghost" id="cfg-push">Выгрузить</button>
       </div>
+      <p class="h" style="margin-top:10px">Кнопка «↻ Обновить» — на вкладке «Сегодня», сверху.</p>
       <div class="status-line" id="cfg-status"></div>
     </div>
 
