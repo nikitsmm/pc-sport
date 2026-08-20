@@ -927,9 +927,9 @@
       var isGroupEnd = i === chatMessages.length - 1 || !sameGroup(m, chatMessages[i + 1]);
       var time = m.at ? m.at.slice(11, 16) : '';
 
-      var avatarHtml = isGroupEnd
+      var avatarHtml = mine ? '' : (isGroupEnd
         ? '<div class="msg-avatar" style="background:' + participantColor(m.participantId) + '">' + participantInitial(m.participantId) + '</div>'
-        : '<div class="avatar-spacer"></div>';
+        : '<div class="avatar-spacer"></div>');
       var senderHtml = (isGroupStart && !mine)
         ? '<div class="msg-sender-inline" style="color:' + participantColor(m.participantId) + '">' + esc(participantName(m.participantId)) + '</div>'
         : '';
@@ -1129,7 +1129,7 @@
     clearReply();
     renderChat();
     window.scrollTo(0, document.body.scrollHeight);
-    return Storage.chat.send(myId, text, replyToId).then(function (msg) {
+    return Storage.chat.send(myId, text, replyToId, tempId).then(function (msg) {
       chatMessages = chatMessages.filter(function (m) { return m.id !== tempId; });
       chatMerge([msg]);
       renderChat();

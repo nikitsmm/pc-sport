@@ -562,12 +562,14 @@
         return api(cfg.url, 'get_messages', since ? { since: since } : {});
       },
 
-      send: async function (participantId, text, replyTo) {
+      send: async function (participantId, text, replyTo, clientId) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) {
           throw new Error('Чат работает только при включённой облачной синхронизации');
         }
-        var r = await apiRetry(cfg.url, 'send_message', { participantId: participantId, text: text, replyTo: replyTo || null }, 3);
+        var r = await apiRetry(cfg.url, 'send_message', {
+          participantId: participantId, text: text, replyTo: replyTo || null, clientId: clientId || null
+        }, 3);
         return r.message;
       },
 
@@ -580,10 +582,11 @@
         if (cfg.backend !== 'cloud' || !cfg.url) {
           throw new Error('Чат работает только при включённой облачной синхронизации');
         }
+        var clientId = 'v-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
         var r = await apiRetry(cfg.url, 'send_message', {
           participantId: participantId, type: 'video', text: caption || '',
           videoPath: video.path, videoExt: video.ext, videoThumb: video.thumb || null,
-          videoReps: video.reps || null, videoDate: video.date
+          videoReps: video.reps || null, videoDate: video.date, clientId: clientId
         }, 3);
         return r.message;
       },
