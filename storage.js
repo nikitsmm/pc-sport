@@ -419,7 +419,7 @@
         } catch (e) { confirmed = false; }
 
         try { await idbDelete(pendingId); } catch (e) {}
-        return { confirmed: confirmed };
+        return { confirmed: confirmed, path: upMeta.path, videoId: upMeta.videoId };
       },
 
       /* Список ещё не отправленных роликов — например, после того как
@@ -471,6 +471,77 @@
     },
 
     /* ============================================================
+       Push-уведомления (Web Push) — приходят даже когда приложение
+       полностью закрыто, не только пока браузер жив в фоне. На iPhone
+       работает ТОЛЬКО для приложения, установленного через «Добавить
+       на экран Домой» — обычная вкладка Safari push не получит никогда,
+       это ограничение самого iOS.
+
+       Публичный VAPID-ключ — не секрет, ровно поэтому он в коде клиента:
+       им нельзя ничего подписать, только браузер использует его, чтобы
+       зашифровать подписку так, что расшифровать её сможет только
+       владелец приватного ключа (наш бэкенд). Приватный ключ живёт
+       только в переменных окружения функции.
+       ============================================================ */
+    push: {
+      VAPID_PUBLIC_KEY: 'BAWcHG-8IwPG9yILkKHxmYxwF3rycwtLMHcU_7gkAQ2y5rPFzsMyPeQac3RM2QPRAEuH-r6d2xLYnFbkTkDCsvU',
+
+      supported: function () {
+        return !!(global.navigator && 'serviceWorker' in navigator && 'PushManager' in global);
+      },
+
+      _urlBase64ToUint8Array: function (base64String) {
+        var padding = '='.repeat((4 - base64String.length % 4) % 4);
+        var base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        var raw = atob(base64);
+        var out = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+        return out;
+      },
+
+      /* Оформляет подписку браузера (если её ещё нет) и отправляет её
+         бэкенду, привязанную к конкретному участнику — чтобы функция
+         знала, кому именно слать push при новом сообщении. */
+      subscribe: async function (participantId) {
+        if (!this.supported()) throw new Error('Push-уведомления не поддерживаются этим браузером');
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+
+        var reg = await navigator.serviceWorker.ready;
+        var sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: this._urlBase64ToUint8Array(this.VAPID_PUBLIC_KEY)
+          });
+        }
+        await api(cfg.url, 'save_push_subscription', { participantId: participantId, subscription: sub.toJSON() });
+        return true;
+      },
+
+      unsubscribe: async function (participantId) {
+        if (!this.supported()) return;
+        var cfg = Config.read();
+        var reg = await navigator.serviceWorker.ready;
+        var sub = await reg.pushManager.getSubscription();
+        if (sub) {
+          var endpoint = sub.endpoint;
+          await sub.unsubscribe();
+          if (cfg.backend === 'cloud' && cfg.url) {
+            await api(cfg.url, 'remove_push_subscription', { participantId: participantId, endpoint: endpoint }).catch(function () {});
+          }
+        }
+      },
+
+      isSubscribed: async function () {
+        if (!this.supported()) return false;
+        var reg = await navigator.serviceWorker.ready;
+        var sub = await reg.pushManager.getSubscription();
+        return !!sub;
+      }
+    },
+
+    /* ============================================================
        Чат — общий файл на Диске, тот же принцип, что и у видео-индекса.
        Локальный кэш даёт мгновенный список при открытии вкладки, пока
        свежие сообщения подтягиваются в фоне.
@@ -491,12 +562,39 @@
         return api(cfg.url, 'get_messages', since ? { since: since } : {});
       },
 
-      send: async function (participantId, text) {
+      send: async function (participantId, text, replyTo) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) {
           throw new Error('Чат работает только при включённой облачной синхронизации');
         }
-        var r = await apiRetry(cfg.url, 'send_message', { participantId: participantId, text: text }, 3);
+        var r = await apiRetry(cfg.url, 'send_message', { participantId: participantId, text: text, replyTo: replyTo || null }, 3);
+        return r.message;
+      },
+
+      /* Видео как отдельная карточка в ленте чата — не просто текстовое
+         уведомление о загрузке, а полноценное сообщение со своим
+         превью, на которое можно реагировать и под которым можно
+         обсуждать, как и любое другое сообщение. */
+      sendVideo: async function (participantId, video, caption) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) {
+          throw new Error('Чат работает только при включённой облачной синхронизации');
+        }
+        var r = await apiRetry(cfg.url, 'send_message', {
+          participantId: participantId, type: 'video', text: caption || '',
+          videoPath: video.path, videoExt: video.ext, videoThumb: video.thumb || null,
+          videoReps: video.reps || null, videoDate: video.date
+        }, 3);
+        return r.message;
+      },
+
+      /* Одна реакция на человека на сообщение — повторный тап той же
+         снимает, тап другой — переключает. Логика на бэкенде, тут
+         просто вызов. */
+      react: async function (participantId, messageId, emoji) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        var r = await apiRetry(cfg.url, 'react_message', { participantId: participantId, messageId: messageId, emoji: emoji }, 3);
         return r.message;
       }
     }

@@ -23,6 +23,7 @@
   };
 
   var STATUSES = ['done', 'alt', 'forgiven', 'missed'];
+  var REACTIONS = ['👍', '❤️', '😂', '🔥', '💪'];
   var LABEL = { done: 'Норма', alt: 'Альт', forgiven: 'Форс', missed: 'Пропуск' };
   var GLYPH = { done: '✓', alt: '⇄', forgiven: '⚑', missed: '✕' };
   var EXNAME = { pullups: 'подтягиваний', pushups: 'отжиманий' };
@@ -677,7 +678,6 @@
     $('#rec-msg').textContent = 'Отправляю… 0%';
 
     PCLog.info('Видео: начинаю загрузку (' + who + ', ' + shortDate(s.date) + ', ' + Math.round(s.blob.size / 1024) + ' КБ' + (meta.reps ? ', ' + meta.reps + ' повт.' : '') + ')');
-    chatAnnounce(s.participantId, '🎥 Начал загрузку видео на Диск…' + (meta.reps ? ' (' + meta.reps + ' повт.)' : ''));
 
     var slowHint = setTimeout(function () {
       $('#rec-msg').textContent += ' (сеть иногда даёт паузу — это не всегда зависание, идёт повтор)';
@@ -694,7 +694,7 @@
         ? 'Отправлено'
         : 'Файл на Диске, но подтверждение задержалось — появится в списке само';
       PCLog.info('Видео: загружено (' + who + ', confirmed=' + r.confirmed + ')');
-      chatAnnounce(s.participantId, '✅ Загрузил видео на Диск' + (r.confirmed ? '' : ' (появится в списке чуть позже)'));
+
       setTimeout(function () {
         closeRecorder();
         refreshVideoIndex();
@@ -833,6 +833,47 @@
     btn.classList.toggle('unset', !p);
   }
 
+  var reactionPickerFor = null; // id сообщения, для которого сейчас раскрыт выбор реакции
+
+  function renderReactions(m) {
+    var mine = myId();
+    var reactions = m.reactions || {};
+
+    if (reactionPickerFor === m.id) {
+      return '<div class="msg-reactions">' + REACTIONS.map(function (e) {
+        return '<button class="react-choice" data-mid="' + m.id + '" data-emoji="' + e + '">' + e + '</button>';
+      }).join('') + '</div>';
+    }
+
+    var pills = REACTIONS.map(function (e) {
+      var who = reactions[e] || [];
+      var isMine = who.indexOf(mine) !== -1;
+      if (!who.length) return '';
+      return '<button class="react-pill' + (isMine ? ' mine' : '') + '" data-mid="' + m.id + '" data-emoji="' + e + '">' +
+             e + ' ' + who.length + '</button>';
+    }).join('');
+    return '<div class="msg-reactions">' + pills + '<button class="react-add" data-mid="' + m.id + '">😊+</button></div>';
+  }
+
+  function renderReplyQuote(m) {
+    if (!m.replyTo) return '';
+    var orig = chatMessages.filter(function (x) { return x.id === m.replyTo; })[0];
+    if (!orig) return '<div class="reply-quote"><b>Ответ на сообщение</b></div>';
+    var preview = orig.type === 'video' ? '🎥 видео' : (orig.text || '').slice(0, 80);
+    return '<div class="reply-quote"><b>' + esc(participantName(orig.participantId)) + '</b>' + esc(preview) + '</div>';
+  }
+
+  function renderMessageBody(m) {
+    if (m.type === 'video') {
+      var thumb = m.videoThumb ? '<img src="' + m.videoThumb + '" alt="">' : '<div class="chat-vid-noimg">▶</div>';
+      var reps = m.videoReps ? '<span class="chat-vid-reps">' + m.videoReps + ' повт.</span>' : '';
+      var caption = m.text ? '<div class="txt">' + esc(m.text) + '</div>' : '';
+      return '<button class="chat-vid-card" data-play="' + m.videoPath + '" data-who="' + esc(participantName(m.participantId)) + '" data-reps="' + (m.videoReps || '') + '">' +
+             thumb + '<span class="chat-vid-play">▶</span>' + reps + '</button>' + caption;
+    }
+    return '<div class="txt">' + esc(m.text) + '</div>';
+  }
+
   function renderChat() {
     var myId = Storage.identity.read();
     var known = state.participants.some(function (p) { return p.id === myId; });
@@ -850,19 +891,52 @@
        своего overflow, скроллится вся страница (окно), не div. */
     var wasAtBottom = (document.body.scrollHeight - window.scrollY - window.innerHeight) < 80;
 
+    var divider = computeUnreadDivider(myId);
+
     var lastDay = '';
     log.innerHTML = chatMessages.map(function (m) {
       var day = m.at ? m.at.slice(0, 10) : '';
       var sep = '';
       if (day && day !== lastDay) { sep = '<div class="chat-day">' + shortDate(day) + '</div>'; lastDay = day; }
+      if (divider && m.id === divider.beforeId) {
+        sep += '<div class="chat-unread-divider">▲ ' + divider.count + ' ' + plural(divider.count, 'новое', 'новых', 'новых') + '</div>';
+      }
       var mine = m.participantId === myId;
       var time = m.at ? m.at.slice(11, 16) : '';
-      var cls = 'chat-msg' + (mine ? ' mine' : '') + (m.pending ? ' pending' : '');
+      var cls = 'chat-msg' + (mine ? ' mine' : '') + (m.pending ? ' pending' : '') + (m.type === 'video' ? ' has-video' : '');
+      var replyBtn = m.pending ? '' : '<button class="reply-btn" data-mid="' + m.id + '" title="Ответить">↩</button>';
       return sep + '<div class="' + cls + '">' +
         (mine ? '' : '<div class="who">' + esc(participantName(m.participantId)) + '</div>') +
-        '<div class="txt">' + esc(m.text) + '</div>' +
-        '<div class="t">' + time + (m.pending ? ' · отправка…' : '') + '</div></div>';
+        renderReplyQuote(m) +
+        renderMessageBody(m) +
+        '<div class="t">' + replyBtn + time + (m.pending ? ' · отправка…' : '') + '</div>' +
+        (m.pending ? '' : renderReactions(m)) +
+        '</div>';
     }).join('');
+
+    log.querySelectorAll('.reply-btn').forEach(function (b) {
+      b.addEventListener('click', function () { startReply(b.dataset.mid); });
+    });
+
+    log.querySelectorAll('[data-play]').forEach(function (b) {
+      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who, b.dataset.reps); });
+    });
+    log.querySelectorAll('.react-pill, .react-choice').forEach(function (b) {
+      b.addEventListener('click', function () {
+        reactionPickerFor = null;
+        Storage.chat.react(myId, b.dataset.mid, b.dataset.emoji).then(function (updated) {
+          var m = chatMessages.filter(function (x) { return x.id === b.dataset.mid; })[0];
+          if (m) m.reactions = updated.reactions;
+          renderChat();
+        }).catch(function (e) { PCLog.warn('Реакция не отправилась: ' + e.message); });
+      });
+    });
+    log.querySelectorAll('.react-add').forEach(function (b) {
+      b.addEventListener('click', function () {
+        reactionPickerFor = (reactionPickerFor === b.dataset.mid) ? null : b.dataset.mid;
+        renderChat();
+      });
+    });
 
     if (wasAtBottom) window.scrollTo(0, document.body.scrollHeight);
   }
@@ -877,22 +951,41 @@
     if (!items || !items.length) return false;
     var byId = {};
     chatMessages.forEach(function (m) { byId[m.id] = m; });
-    var added = false;
+    var changed = false;
     items.forEach(function (m) {
-      if (!byId[m.id]) { chatMessages.push(m); byId[m.id] = m; added = true; }
+      if (!byId[m.id]) {
+        chatMessages.push(m);
+        byId[m.id] = m;
+        changed = true;
+      } else if (JSON.stringify(byId[m.id].reactions || {}) !== JSON.stringify(m.reactions || {})) {
+        /* Сообщение уже известно — но, например, кто-то другой поставил
+           реакцию на него. Обновляем на месте, не просто добавляем новые. */
+        byId[m.id].reactions = m.reactions;
+        changed = true;
+      }
     });
-    if (added) {
+    if (changed) {
       chatMessages.sort(function (a, b) { return (a.at || '') < (b.at || '') ? -1 : 1; });
       Storage.chat.writeCache(chatMessages);
     }
-    return added;
+    return changed;
   }
+
+  var chatPollCount = 0;
 
   function pollChat(isInitial) {
     var cfg = Storage.config.read();
     if (cfg.backend !== 'cloud' || !cfg.url) return Promise.resolve();
+    /* since-опрос экономит трафик, но принципиально не видит изменений
+       на УЖЕ известных сообщениях (например, реакцию, которую кто-то
+       другой поставил на старое сообщение) — сервер отдаёт по since
+       только то, что добавлено ПОСЛЕ. Раз в несколько тиков делаем
+       полный опрос без since, чтобы такие изменения всё-таки долетали,
+       не только у себя же после собственной реакции. */
+    chatPollCount++;
+    var fullPoll = isInitial || (chatPollCount % 4 === 0);
     var since = chatMessages.length ? chatMessages[chatMessages.length - 1].id : null;
-    return Storage.chat.fetch(isInitial ? null : since).then(function (r) {
+    return Storage.chat.fetch(fullPoll ? null : since).then(function (r) {
       var items = (r && r.items) || [];
       var myId = Storage.identity.read();
       var newFromOthers = items.filter(function (m) {
@@ -914,6 +1007,7 @@
 
   function startChatPolling() {
     stopChatPolling();
+    chatPollCount = 0;
     pollChat(true);
     chatPollTimer = setInterval(function () { pollChat(false); }, 8000);
   }
@@ -928,11 +1022,43 @@
     var count = (parseInt(dot.textContent, 10) || 0) + n;
     dot.textContent = String(count);
     dot.hidden = false;
+    setAppBadge(count);
+  }
+
+  var unreadSnapshot = null; // { beforeId, count } — фиксируется на момент открытия вкладки чата
+
+  function prepareUnreadSnapshot() {
+    var lastRead = null;
+    try { lastRead = localStorage.getItem(LS_LAST_READ) || null; } catch (e) {}
+    var myIdVal = Storage.identity.read();
+    if (!chatMessages.length) { unreadSnapshot = null; return; }
+
+    var startIdx = 0;
+    if (lastRead) {
+      var idx = chatMessages.findIndex(function (m) { return m.id === lastRead; });
+      startIdx = (idx === -1) ? chatMessages.length : idx + 1;
+    }
+    var unread = chatMessages.slice(startIdx).filter(function (m) { return m.participantId !== myIdVal; });
+    unreadSnapshot = (unread.length && startIdx < chatMessages.length)
+      ? { beforeId: chatMessages[startIdx].id, count: unread.length }
+      : null;
+  }
+
+  /* Возвращает уже посчитанный снимок — специально не пересчитывает на
+     лету при каждом рендере, иначе делитель "N новых" исчезал бы сразу
+     же после markChatRead(), не успев показаться человеку. */
+  function computeUnreadDivider() { return unreadSnapshot; }
+
+  function setAppBadge(n) {
+    if (!('setAppBadge' in navigator)) return;
+    if (n > 0) navigator.setAppBadge(n).catch(function () {});
+    else if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(function () {});
   }
 
   function markChatRead() {
     var dot = $('#chat-dot');
     if (dot) { dot.hidden = true; dot.textContent = ''; }
+    setAppBadge(0);
     try { localStorage.setItem(LS_LAST_READ, chatMessages.length ? chatMessages[chatMessages.length - 1].id : ''); } catch (e) {}
   }
 
@@ -947,16 +1073,20 @@
     } catch (e) { PCLog.warn('Notification: ' + e.message); }
   }
 
+  var replyingTo = null; // сообщение, на которое сейчас готовится ответ
+
   function sendChatMessage(text) {
     var myId = Storage.identity.read();
     text = (text || '').trim();
     if (!text || !myId) return Promise.resolve();
     var tempId = 'tmp-' + Date.now();
-    var optimistic = { id: tempId, participantId: myId, text: text, at: new Date().toISOString(), pending: true };
+    var replyToId = replyingTo ? replyingTo.id : null;
+    var optimistic = { id: tempId, participantId: myId, text: text, at: new Date().toISOString(), pending: true, replyTo: replyToId };
     chatMessages.push(optimistic);
+    clearReply();
     renderChat();
     window.scrollTo(0, document.body.scrollHeight);
-    return Storage.chat.send(myId, text).then(function (msg) {
+    return Storage.chat.send(myId, text, replyToId).then(function (msg) {
       chatMessages = chatMessages.filter(function (m) { return m.id !== tempId; });
       chatMerge([msg]);
       renderChat();
@@ -966,6 +1096,31 @@
       if (m) { m.pending = false; m.failed = true; m.text += '  [не отправлено]'; }
       renderChat();
     });
+  }
+
+  function startReply(messageId) {
+    var m = chatMessages.filter(function (x) { return x.id === messageId; })[0];
+    if (!m) return;
+    replyingTo = m;
+    renderReplyBar();
+    var input = $('#chat-text');
+    if (input) input.focus();
+  }
+
+  function clearReply() {
+    replyingTo = null;
+    renderReplyBar();
+  }
+
+  function renderReplyBar() {
+    var bar = $('#chat-reply-bar');
+    if (!bar) return;
+    if (!replyingTo) { bar.hidden = true; bar.innerHTML = ''; return; }
+    var name = participantName(replyingTo.participantId);
+    var preview = replyingTo.type === 'video' ? '🎥 видео' : (replyingTo.text || '').slice(0, 80);
+    bar.hidden = false;
+    bar.innerHTML = '<div class="reply-bar-txt"><b>' + esc(name) + '</b><br>' + esc(preview) + '</div><button id="chat-reply-cancel">✕</button>';
+    $('#chat-reply-cancel').addEventListener('click', clearReply);
   }
 
   /* Автосообщения о видео — от лица того, кто грузит, не от «бота»:
@@ -1149,12 +1304,14 @@
     });
     window.scrollTo(0, 0);
     if (view === 'chat') {
+      prepareUnreadSnapshot();
       markChatRead();
       renderChat();
       startChatPolling();
       scrollChatToBottom();
     } else {
       stopChatPolling();
+      unreadSnapshot = null; // при следующем открытии посчитается заново
     }
   }
 
@@ -1204,9 +1361,30 @@
     $('#cfg-notify').addEventListener('click', function () {
       var st = $('#cfg-notify-status');
       if (!('Notification' in window)) { st.textContent = 'Браузер не поддерживает уведомления'; st.className = 'status-line err'; return; }
+      if (!myId()) { st.textContent = 'Сначала выбери, кто ты (см. выше)'; st.className = 'status-line err'; return; }
+
       Notification.requestPermission().then(function (perm) {
-        if (perm === 'granted') { st.textContent = 'Включено'; st.className = 'status-line ok'; PCLog.info('Уведомления разрешены'); }
-        else { st.textContent = 'Не разрешено в браузере'; st.className = 'status-line err'; PCLog.warn('Уведомления не разрешены: ' + perm); }
+        if (perm !== 'granted') {
+          st.textContent = 'Не разрешено в браузере';
+          st.className = 'status-line err';
+          PCLog.warn('Уведомления не разрешены: ' + perm);
+          return;
+        }
+        if (!Storage.push.supported()) {
+          st.textContent = 'Разрешение получено, но push не поддерживается — на iPhone работает только для версии, добавленной на «Экран Домой»';
+          st.className = 'status-line err';
+          return;
+        }
+        st.textContent = 'Оформляю подписку…';
+        Storage.push.subscribe(myId()).then(function () {
+          st.textContent = 'Включено — теперь прилетит, даже если приложение полностью закрыто';
+          st.className = 'status-line ok';
+          PCLog.info('Push-подписка оформлена для ' + myId());
+        }).catch(function (e) {
+          st.textContent = 'Не получилось подписаться: ' + e.message;
+          st.className = 'status-line err';
+          PCLog.error('Push-подписка не удалась: ' + e.message);
+        });
       });
     });
 

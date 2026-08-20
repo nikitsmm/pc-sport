@@ -7,7 +7,7 @@
    телефон в сети, всегда грузится свежее; кэш нужен только когда сети
    вообще нет. */
 
-var CACHE = 'pcsport-v35';
+var CACHE = 'pcsport-v38';
 var SHELL = [
   './',
   'index.html',
@@ -73,6 +73,42 @@ self.addEventListener('fetch', function (e) {
       return res;
     }).catch(function () {
       return caches.match(e.request).then(function (hit) { return hit || caches.match('index.html'); });
+    })
+  );
+});
+
+/* ============================================================
+   Push-уведомления. Приходят даже когда приложение полностью закрыто —
+   этим Push API отличается от Notification API, который работал только
+   пока вкладка жива хотя бы в фоне. На iPhone работает только для
+   приложения, добавленного на «Экран Домой» (см. backend/index.py).
+   ============================================================ */
+self.addEventListener('push', function (e) {
+  var data = {};
+  try { data = e.data ? e.data.json() : {}; } catch (err) {}
+  var title = data.title || 'ПЦ Спорт';
+
+  e.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || 'Новое сообщение',
+      tag: data.tag || 'pcsport-chat',
+      icon: 'icons/icon-192.png',
+      badge: 'icons/icon-192.png',
+      renotify: true
+    })
+  );
+});
+
+/* Тап по самому уведомлению — открывает приложение (или переключает
+   на уже открытую вкладку, если она есть, вместо нового окна). */
+self.addEventListener('notificationclick', function (e) {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+      for (var i = 0; i < list.length; i++) {
+        if ('focus' in list[i]) return list[i].focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow('./');
     })
   );
 });

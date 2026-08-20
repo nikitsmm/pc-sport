@@ -268,11 +268,61 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 .chat-msg .who{font-family:"JetBrains Mono",monospace;font-size:10.5px;font-weight:700;letter-spacing:.04em;
   text-transform:uppercase;color:var(--steel);margin-bottom:2px;}
 .chat-msg .txt{white-space:pre-wrap;word-break:break-word;}
-.chat-msg .t{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--muted);margin-top:3px;text-align:right;}
+.chat-msg .t{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--muted);margin-top:3px;
+  text-align:right;display:flex;align-items:center;justify-content:flex-end;gap:2px;}
 .chat-msg.mine{align-self:flex-end;background:var(--ink);color:#fff;border-color:var(--ink);}
 .chat-msg.mine .who{color:#9FB0BE;}
 .chat-msg.mine .t{color:#9FB0BE;}
 .chat-msg.pending{opacity:.55;}
+.chat-msg.has-video{padding:6px;}
+
+/* ---------- видео-карточка в чате ---------- */
+.chat-vid-card{position:relative;display:block;width:168px;aspect-ratio:3/4;background:var(--ink);
+  border:0;padding:0;overflow:hidden;}
+.chat-vid-card img{width:100%;height:100%;object-fit:cover;display:block;}
+.chat-vid-noimg{width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+  color:#4A5B6B;font-size:28px;}
+.chat-vid-play{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:36px;height:36px;border-radius:50%;background:rgba(16,23,30,.55);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:14px;pointer-events:none;}
+.chat-vid-reps{position:absolute;bottom:5px;right:5px;background:rgba(16,23,30,.82);color:#fff;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;padding:2px 5px;}
+.chat-msg.has-video .txt{padding:6px 6px 0;}
+
+/* ---------- реакции ---------- */
+.msg-reactions{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;}
+.react-pill{background:rgba(51,72,92,.12);border:1px solid transparent;color:var(--ink);
+  font-size:12px;padding:2px 7px;line-height:1.5;border-radius:10px;}
+.chat-msg.mine .react-pill{background:rgba(255,255,255,.15);color:#fff;}
+.react-pill.mine{border-color:var(--signal);}
+.react-add{background:transparent;border:1px dashed var(--rule);color:var(--muted);
+  font-size:11px;padding:2px 6px;line-height:1.5;border-radius:10px;}
+.chat-msg.mine .react-add{border-color:#4A5B6B;color:#9FB0BE;}
+.react-choice{background:var(--paper);border:1px solid var(--rule);font-size:15px;
+  padding:3px 7px;line-height:1.4;border-radius:10px;}
+
+/* ---------- делитель непрочитанных ---------- */
+.chat-unread-divider{align-self:center;font-family:"JetBrains Mono",monospace;font-size:10.5px;
+  font-weight:700;color:#fff;background:var(--signal);padding:3px 12px;margin:10px 0 8px;
+  text-transform:uppercase;letter-spacing:.06em;}
+
+/* ---------- ответ на сообщение ---------- */
+.reply-btn{background:transparent;border:0;color:var(--muted);font-size:12px;padding:0 6px 0 0;
+  vertical-align:middle;}
+.chat-msg.mine .reply-btn{color:#9FB0BE;}
+.reply-quote{border-left:2px solid var(--steel);padding:2px 0 2px 8px;margin-bottom:5px;
+  font-size:12px;color:var(--muted);line-height:1.3;}
+.reply-quote b{display:block;font-family:"JetBrains Mono",monospace;font-size:10px;
+  text-transform:uppercase;letter-spacing:.03em;color:var(--steel);}
+.chat-msg.mine .reply-quote{border-left-color:#4A5B6B;color:#B7C4CE;}
+.chat-msg.mine .reply-quote b{color:#9FB0BE;}
+
+.reply-bar{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--rule);
+  border-bottom:0;padding:7px 10px;font-size:12.5px;color:var(--steel);}
+.reply-bar-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.reply-bar-txt b{display:block;font-family:"JetBrains Mono",monospace;font-size:10px;
+  text-transform:uppercase;letter-spacing:.03em;color:var(--muted);}
+.reply-bar button{background:transparent;border:0;color:var(--muted);font-size:15px;padding:2px 4px;}
 
 .chat-input{position:sticky;bottom:calc(70px + var(--safe-b));display:flex;gap:8px;
   background:var(--paper);padding:8px 0 4px;}

@@ -19,7 +19,7 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v35 · 17.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v38 · 17.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -83,6 +83,7 @@
 
     <div id="chat-wrap" hidden>
       <div class="chat-log" id="chat-log"></div>
+      <div class="reply-bar" id="chat-reply-bar" hidden></div>
       <form class="chat-input" id="chat-form">
         <input id="chat-text" type="text" placeholder="Сообщение…" autocomplete="off" maxlength="2000">
         <button class="btn" id="chat-send" type="submit">➤</button>
@@ -213,7 +214,7 @@
 
     <h2>Уведомления</h2>
     <div class="panel">
-      <p class="h" style="margin:0 0 10px">Работает, пока приложение открыто в браузере (хотя бы в фоновой вкладке). Уведомления, когда телефон заблокирован и приложение полностью закрыто, — отдельная, более тяжёлая штука (Web Push), сейчас её нет.</p>
+      <p class="h" style="margin:0 0 10px">Приходит даже когда приложение полностью закрыто. На iPhone — только если приложение добавлено на «Экран Домой» (Safari → «Поделиться» → «На экран "Домой"»); из обычной вкладки Safari push не работает — это ограничение самого iOS, обойти нельзя.</p>
       <button class="btn ghost" id="cfg-notify" style="width:100%">Включить уведомления о новых сообщениях</button>
       <div class="status-line" id="cfg-notify-status"></div>
     </div>
