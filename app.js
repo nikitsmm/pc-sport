@@ -835,6 +835,26 @@
 
   var reactionPickerFor = null; // id сообщения, для которого сейчас раскрыт выбор реакции
 
+  /* Цвет и инициал участника — детерминированные, как MEMBER_PALETTE в
+     Herald Chat, только палитра фиксированная под четырёх известных
+     участников (тут не нужен хэш по id — их и так всего четыре). */
+  var PARTICIPANT_COLOR = { kolya: '#64B5F6', vanya: '#81C784', artur: '#FFB74D', anton: '#BA68C8' };
+  function participantColor(id) { return PARTICIPANT_COLOR[id] || '#9aa0a8'; }
+  function participantInitial(id) {
+    var name = participantName(id);
+    return name ? name.trim().charAt(0).toUpperCase() : '?';
+  }
+
+  /* Группировка подряд идущих сообщений одного автора (как в телеге):
+     сообщения одного отправителя без больших пауз между собой визуально
+     объединяются в одну "пачку" — имя и аватар показываются только у
+     первого/последнего сообщения пачки, остальные идут вплотную. */
+  var GROUP_GAP_MS = 5 * 60 * 1000;
+  function sameGroup(a, b) {
+    return a && b && a.participantId === b.participantId &&
+      Math.abs(new Date(b.at) - new Date(a.at)) < GROUP_GAP_MS;
+  }
+
   function renderReactions(m) {
     var mine = myId();
     var reactions = m.reactions || {};
@@ -858,20 +878,20 @@
   function renderReplyQuote(m) {
     if (!m.replyTo) return '';
     var orig = chatMessages.filter(function (x) { return x.id === m.replyTo; })[0];
-    if (!orig) return '<div class="reply-quote"><b>Ответ на сообщение</b></div>';
+    if (!orig) return '<div class="reply-quote" data-scrollto="' + m.replyTo + '"><b>Ответ на сообщение</b></div>';
     var preview = orig.type === 'video' ? '🎥 видео' : (orig.text || '').slice(0, 80);
-    return '<div class="reply-quote"><b>' + esc(participantName(orig.participantId)) + '</b>' + esc(preview) + '</div>';
+    return '<div class="reply-quote" data-scrollto="' + orig.id + '"><b>' + esc(participantName(orig.participantId)) + '</b><span>' + esc(preview) + '</span></div>';
   }
 
-  function renderMessageBody(m) {
+  function renderMessageBody(m, time) {
     if (m.type === 'video') {
       var thumb = m.videoThumb ? '<img src="' + m.videoThumb + '" alt="">' : '<div class="chat-vid-noimg">▶</div>';
       var reps = m.videoReps ? '<span class="chat-vid-reps">' + m.videoReps + ' повт.</span>' : '';
-      var caption = m.text ? '<div class="txt">' + esc(m.text) + '</div>' : '';
+      var caption = m.text ? '<div class="bubble-text">' + esc(m.text) + '<span class="msg-time-inline">' + time + '</span></div>' : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + '</div>';
       return '<button class="chat-vid-card" data-play="' + m.videoPath + '" data-who="' + esc(participantName(m.participantId)) + '" data-reps="' + (m.videoReps || '') + '">' +
              thumb + '<span class="chat-vid-play">▶</span>' + reps + '</button>' + caption;
     }
-    return '<div class="txt">' + esc(m.text) + '</div>';
+    return '<div class="bubble-text">' + esc(m.text) + '<span class="msg-time-inline">' + time + (m.pending ? ' · отправка…' : '') + '</span></div>';
   }
 
   function renderChat() {
@@ -894,25 +914,48 @@
     var divider = computeUnreadDivider(myId);
 
     var lastDay = '';
-    log.innerHTML = chatMessages.map(function (m) {
+    log.innerHTML = chatMessages.map(function (m, i) {
       var day = m.at ? m.at.slice(0, 10) : '';
       var sep = '';
       if (day && day !== lastDay) { sep = '<div class="chat-day">' + shortDate(day) + '</div>'; lastDay = day; }
       if (divider && m.id === divider.beforeId) {
         sep += '<div class="chat-unread-divider">▲ ' + divider.count + ' ' + plural(divider.count, 'новое', 'новых', 'новых') + '</div>';
       }
+
       var mine = m.participantId === myId;
+      var isGroupStart = i === 0 || !sameGroup(chatMessages[i - 1], m);
+      var isGroupEnd = i === chatMessages.length - 1 || !sameGroup(m, chatMessages[i + 1]);
       var time = m.at ? m.at.slice(11, 16) : '';
-      var cls = 'chat-msg' + (mine ? ' mine' : '') + (m.pending ? ' pending' : '') + (m.type === 'video' ? ' has-video' : '');
+
+      var avatarHtml = isGroupEnd
+        ? '<div class="msg-avatar" style="background:' + participantColor(m.participantId) + '">' + participantInitial(m.participantId) + '</div>'
+        : '<div class="avatar-spacer"></div>';
+      var senderHtml = (isGroupStart && !mine)
+        ? '<div class="msg-sender-inline" style="color:' + participantColor(m.participantId) + '">' + esc(participantName(m.participantId)) + '</div>'
+        : '';
       var replyBtn = m.pending ? '' : '<button class="reply-btn" data-mid="' + m.id + '" title="Ответить">↩</button>';
-      return sep + '<div class="' + cls + '">' +
-        (mine ? '' : '<div class="who">' + esc(participantName(m.participantId)) + '</div>') +
-        renderReplyQuote(m) +
-        renderMessageBody(m) +
-        '<div class="t">' + replyBtn + time + (m.pending ? ' · отправка…' : '') + '</div>' +
-        (m.pending ? '' : renderReactions(m)) +
+
+      var rowCls = 'msg-row' + (mine ? ' mine' : '') + (isGroupStart ? ' group-start' : '');
+      var bubbleCls = 'bubble' + (mine ? ' out' : ' in') + (m.pending ? ' pending' : '');
+
+      return sep +
+        '<div class="' + rowCls + '" id="msg-' + m.id + '">' + avatarHtml +
+          '<div class="msg-col">' +
+            '<div class="' + bubbleCls + '">' + replyBtn + senderHtml + renderReplyQuote(m) + renderMessageBody(m, time) + '</div>' +
+            (m.pending ? '' : renderReactions(m)) +
+          '</div>' +
         '</div>';
     }).join('');
+
+    log.querySelectorAll('.reply-quote[data-scrollto]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var target = document.getElementById('msg-' + b.dataset.scrollto);
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('flash');
+        setTimeout(function () { target.classList.remove('flash'); }, 900);
+      });
+    });
 
     log.querySelectorAll('.reply-btn').forEach(function (b) {
       b.addEventListener('click', function () { startReply(b.dataset.mid); });
