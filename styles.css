@@ -445,6 +445,14 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   box-sizing:border-box;bottom:var(--safe-b);z-index:55;display:flex;align-items:center;gap:8px;
   background:var(--chat-bg);padding:8px 12px 10px;}
 
+/* ---------- кнопка "вниз" (как в Telegram) — когда пролистал вверх ---------- */
+.scroll-bottom-btn{position:fixed;right:max(12px, calc(50% - 308px));
+  bottom:calc(78px + var(--safe-b));z-index:54;width:40px;height:40px;border-radius:50%;
+  background:var(--chat-surface);border:1px solid var(--chat-border);color:var(--chat-text);
+  font-size:17px;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 14px rgba(0,0,0,.35);}
+.scroll-bottom-btn:active{background:var(--chat-surface2);}
+
 /* Скрепка + поле + эмодзи — один общий "пузырь", как в референсе
    Telegram Web, а не три отдельных элемента с полем посередине. Кнопка
    отправки намеренно снаружи, отдельным цветным кругом — так же, как

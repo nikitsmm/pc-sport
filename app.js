@@ -1214,8 +1214,16 @@
       wireMessagePress(row, bubbleEl, mObj);
     });
 
-    if (wasAtBottom) window.scrollTo(0, document.body.scrollHeight);
+    /* Не голый window.scrollTo сразу здесь — document.body.scrollHeight
+       в этот самый момент ещё может отражать раскладку ДО того, как
+       браузер применил только что вставленный innerHTML (та же причина,
+       что чинили в v27 для открытия вкладки, см. scrollChatToBottom).
+       Без двойного requestAnimationFrame это иногда промахивалось мимо
+       низа — после своей реакции или отправки казалось, что чат
+       "прыгнул" в центр/куда-то повыше вместо настоящего низа. */
+    if (wasAtBottom) scrollChatToBottom();
     renderSelectBar();
+    updateScrollBottomBtn();
   }
 
   /* Долгое нажатие через таймер + отмена при заметном сдвиге пальца
@@ -1692,7 +1700,7 @@
     chatMessages.push(optimistic);
     clearReply();
     renderChat();
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollChatToBottom();
     return Storage.chat.send(myId, text, replyToId, tempId).then(function (msg) {
       chatMessages = chatMessages.filter(function (m) { return m.id !== tempId; });
       chatMerge([msg]);
@@ -1834,7 +1842,7 @@
     chatMessages.push(optimistic);
     clearReply();
     renderChat();
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollChatToBottom();
 
     return Storage.chat.uploadAttachment(myIdVal, file, null).then(function (up) {
       return Storage.chat.sendAttachment(myIdVal, type, {
@@ -1994,12 +2002,9 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v48', items: [
-      'Время в чате показывало часовой пояс сервера (UTC), а не твой местный — расхождение было в несколько часов, починено',
-      'Последнее сообщение в чате больше не прячется за полем ввода',
-      'Кнопка «← Назад» в чате/настройках/журнале — теперь заметная, не терялась на тёмном фоне',
-      'Верхняя панель (Журнал/Чат/Настройки) закреплена наверху при прокрутке',
-      'Скрепка и эмодзи в поле ввода — убрана случайная рамка от браузера'
+    { v: 'v49', items: [
+      'Чат больше не "прыгал" после отправки сообщения/реакции — теперь честно остаётся у самого низа',
+      'Кнопка «вниз» (как в Telegram) — появляется, если пролистал ленту чата вверх'
     ] }
   ];
 
@@ -2102,7 +2107,10 @@
       renderChat();
       scrollChatToBottom();
       repositionChatBars();
+      updateScrollBottomBtn();
     } else {
+      var scrollBtn = $('#scroll-bottom-btn');
+      if (scrollBtn) scrollBtn.hidden = true;
       unreadSnapshot = null; // при следующем открытии посчитается заново
     }
     /* Опрос чата и реальное время теперь НЕ привязаны к тому, открыта
@@ -2129,6 +2137,19 @@
         window.scrollTo(0, document.body.scrollHeight);
       });
     });
+  }
+
+  /* Кнопка "вниз" (как в Telegram) — всплывает, когда пролистал ленту
+     чата вверх дальше чем на экран, и пропадает у самого низа. Скролл —
+     всей страницы (window), не отдельного контейнера, см. пояснение
+     выше про #chat-log без своего overflow. */
+  var SCROLL_BOTTOM_THRESHOLD = 200;
+  function updateScrollBottomBtn() {
+    var btn = document.getElementById('scroll-bottom-btn');
+    if (!btn) return;
+    if (!document.getElementById('v-chat').classList.contains('on')) { btn.hidden = true; return; }
+    var distance = document.body.scrollHeight - window.scrollY - window.innerHeight;
+    btn.hidden = distance < SCROLL_BOTTOM_THRESHOLD;
   }
 
   /* Держит композер (и панель ответа над ним) прижатыми к клавиатуре
@@ -2168,6 +2189,12 @@
   function bind() {
     document.querySelectorAll('[data-view]').forEach(function (b) {
       b.addEventListener('click', function () { show(b.dataset.view); });
+    });
+
+    window.addEventListener('scroll', updateScrollBottomBtn, { passive: true });
+    $('#scroll-bottom-btn').addEventListener('click', function () {
+      scrollChatToBottom();
+      markChatRead();
     });
 
     $('#who-btn').addEventListener('click', function () {
