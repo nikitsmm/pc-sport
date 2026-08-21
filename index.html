@@ -19,7 +19,7 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v45 · 21.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v46 · 21.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -84,8 +84,24 @@
     <div id="chat-wrap" hidden>
       <div class="chat-log" id="chat-log"></div>
       <div class="reply-bar" id="chat-reply-bar" hidden></div>
+      <div class="select-bar" id="chat-select-bar" hidden>
+        <button id="chat-select-cancel" title="Отменить">✕</button>
+        <span id="chat-select-count">0</span>
+        <button id="chat-select-copy" title="Копировать">📋</button>
+        <button id="chat-select-delete" title="Удалить" class="danger">🗑</button>
+      </div>
+      <div class="mention-menu" id="mention-menu" hidden></div>
+      <div class="attach-menu" id="attach-menu" hidden>
+        <button type="button" data-attach="media">🖼 Фото или видео</button>
+        <button type="button" data-attach="file">📄 Файл</button>
+      </div>
+      <input type="file" id="attach-input-media" accept="image/*,video/*" hidden>
+      <input type="file" id="attach-input-file" hidden>
+      <div class="emoji-picker" id="emoji-picker" hidden></div>
       <form class="chat-input" id="chat-form">
+        <button class="chat-attach-btn" id="chat-attach-btn" type="button" title="Прикрепить">📎</button>
         <input id="chat-text" type="text" placeholder="Сообщение…" autocomplete="off" maxlength="2000">
+        <button class="chat-emoji-btn" id="chat-emoji-btn" type="button" title="Эмодзи">😊</button>
         <button class="btn" id="chat-send" type="submit">➤</button>
       </form>
     </div>

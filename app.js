@@ -545,9 +545,8 @@
     var preview = $('#rec-preview');
     preview.hidden = false;
     preview.src = URL.createObjectURL(blob);
-    var sizeKb = Math.round(blob.size / 1024);
-    var sizeStr = sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' МБ' : sizeKb + ' КБ';
-    var warn = sizeKb > 15 * 1024 ? ' Файл тяжёлый — загрузка может занять время.' : '';
+    var sizeStr = formatFileSize(blob.size);
+    var warn = blob.size > 15 * 1024 * 1024 ? ' Файл тяжёлый — загрузка может занять время.' : '';
     $('#rec-msg').textContent = 'Готово, ' + sizeStr + '.' + warn;
     grabThumbnail(preview);
   }
@@ -609,10 +608,9 @@
       return;
     }
 
-    var originalKb = Math.round(file.size / 1024);
     $('#rec-timer').hidden = false;
     $('#rec-timer').textContent = 'обработка…';
-    $('#rec-msg').textContent = 'Сжимаю видео из галереи (' + (originalKb / 1024).toFixed(1) + ' МБ) — займёт примерно столько же времени, сколько длится сам ролик, это не зависание.';
+    $('#rec-msg').textContent = 'Сжимаю видео из галереи (' + formatFileSize(file.size) + ') — займёт примерно столько же времени, сколько длится сам ролик, это не зависание.';
 
     PCVideo.compressFile(
       file,
@@ -620,10 +618,8 @@
       function (blob, ext) {
         $('#rec-timer').hidden = true;
         showRecordedPreview(blob, ext);
-        var newKb = Math.round(blob.size / 1024);
         var ratio = blob.size / file.size;
-        var sizeMsg = ' Было ' + (originalKb > 1024 ? (originalKb / 1024).toFixed(1) + ' МБ' : originalKb + ' КБ') +
-          ' → стало ' + (newKb > 1024 ? (newKb / 1024).toFixed(1) + ' МБ' : newKb + ' КБ') + '.';
+        var sizeMsg = ' Было ' + formatFileSize(file.size) + ' → стало ' + formatFileSize(blob.size) + '.';
         /* Сжатие технически "прошло" (не пустой файл, не ошибка) — но
            если размер почти не изменился, значит браузер на этом
            устройстве не уважает заданный битрейт для canvas-потока так
@@ -632,7 +628,7 @@
            той же нет). Честно предупреждаем, а не выдаём за успех. */
         if (ratio > 0.6) {
           sizeMsg += ' Сжатие почти не сработало на этом устройстве — файл всё равно тяжёлый, загрузка может занять время.';
-          PCLog.warn('Сжатие галереи почти не уменьшило файл: было ' + originalKb + ' КБ, стало ' + newKb + ' КБ (' + Math.round(ratio * 100) + '%)');
+          PCLog.warn('Сжатие галереи почти не уменьшило файл: было ' + formatFileSize(file.size) + ', стало ' + formatFileSize(blob.size) + ' (' + Math.round(ratio * 100) + '%)');
         }
         $('#rec-msg').textContent += sizeMsg;
       },
@@ -781,6 +777,64 @@
     });
   }
 
+  /* Открытие вложения по короткому тапу — видео идёт в уже существующий
+     плеер, фото/файл получают presigned-ссылку (та же механика, что и
+     у видео, см. Storage.chat.attachmentUrl → get_download_url) и
+     открываются новой вкладкой: браузер сам решает, показать инлайн
+     (картинка, PDF) или предложить скачать — ничего изобретать не
+     нужно, это стандартное поведение для прямой ссылки на файл. */
+  function openAttachment(m, el) {
+    if (m.type === 'video') { openPlayer(m.videoPath, participantName(m.participantId), m.videoReps); return; }
+    var path = m.attachPath;
+    if (!path) return;
+    if (attachUrlCache[path]) { window.open(attachUrlCache[path], '_blank'); return; }
+    if (el) el.classList.add('loading');
+    Storage.chat.attachmentUrl(path).then(function (url) {
+      attachUrlCache[path] = url;
+      if (el) el.classList.remove('loading');
+      window.open(url, '_blank');
+    }).catch(function (e) {
+      if (el) el.classList.remove('loading');
+      PCLog.warn('Не удалось открыть вложение: ' + e.message);
+      alert('Не получилось открыть файл: ' + e.message);
+    });
+  }
+
+  /* Подгрузка превью фото в ленте — сообщения от других участников (или
+     свои же после перезагрузки страницы) приходят только с attachPath,
+     без localPreview; картинку показываем, как только получена
+     presigned-ссылка. Уже отправленные с локальным превью (свежий
+     optimistic-рендер) не трогаем — там <img> уже стоит. */
+  function loadChatImages(log) {
+    log.querySelectorAll('.chat-img-card[data-attach-path]').forEach(function (card) {
+      if (card.querySelector('img')) return;
+      var path = card.dataset.attachPath;
+      if (!path) return;
+      if (attachUrlCache[path]) { setCardImage(card, attachUrlCache[path]); return; }
+      Storage.chat.attachmentUrl(path).then(function (url) {
+        attachUrlCache[path] = url;
+        setCardImage(card, url);
+      }).catch(function () { card.innerHTML = '<div class="chat-img-spinner">⚠️</div>'; });
+    });
+  }
+  function setCardImage(card, url) {
+    card.innerHTML = '';
+    var img = document.createElement('img');
+    img.alt = '';
+    /* Presigned-ссылка живёт час (см. ExpiresIn в action_get_download_url) —
+       если чат открыт дольше и кэш отдал протухшую ссылку, один раз
+       принудительно перезапрашиваем свежую, а не оставляем битую картинку. */
+    img.onerror = function () {
+      if (card.dataset.retried) return;
+      card.dataset.retried = '1';
+      delete attachUrlCache[card.dataset.attachPath];
+      card.innerHTML = ''; // иначе loadChatImages увидит тут же сломанный <img> и решит, что грузить нечего
+      loadChatImages(card.parentElement || document);
+    };
+    img.src = url;
+    card.appendChild(img);
+  }
+
   function closePlayer() {
     var v = $('#play-video');
     v.pause();
@@ -852,7 +906,18 @@
     btn.classList.toggle('unset', !p);
   }
 
-  var reactionPickerFor = null; // id сообщения, для которого сейчас раскрыт выбор реакции
+  /* Взаимодействие с сообщением — "украдено" у Telegram Web по прямому
+     запросу: короткий тап по пузырю открывает всплывающее меню действий
+     с полосой быстрых реакций сверху (openMessageMenu), долгое нажатие
+     (зажатие) сразу включает режим множественного выбора с чекбоксами
+     слева у каждой строки (enterSelectMode) — ровно то и в той же
+     последовательности, что в референсе. */
+  var selectMode = false;   // режим множественного выбора включён
+  var selectedIds = {};     // {messageId: true} — что выбрано в этом режиме
+  var messageMenuEls = null; // [backdrop, panel] открытого меню действий, если есть
+  var LONG_PRESS_MS = 480;
+  var LONG_PRESS_MOVE_TOLERANCE = 10; // px — если палец уехал дальше, это скролл, не зажатие
+  var attachUrlCache = {}; // attachPath -> presigned GET url, живёт то же время сессии (ссылка на час, см. get_download_url)
 
   /* Цвет и инициал участника — детерминированные, как MEMBER_PALETTE в
      Herald Chat, только палитра фиксированная под четырёх известных
@@ -874,16 +939,13 @@
       Math.abs(new Date(b.at) - new Date(a.at)) < GROUP_GAP_MS;
   }
 
+  /* Только уже поставленные реакции — быстрый тап по чипу переключает
+     свою же (снимает/меняет), как и раньше. Добавление НОВОЙ реакции
+     на сообщение без своей — теперь через меню действий (тап по
+     пузырю → полоса реакций сверху), см. openMessageMenu(). */
   function renderReactions(m) {
     var mine = myId();
     var reactions = m.reactions || {};
-
-    if (reactionPickerFor === m.id) {
-      return '<div class="msg-reactions">' + REACTIONS.map(function (e) {
-        return '<button class="react-choice" data-mid="' + m.id + '" data-emoji="' + e + '">' + e + '</button>';
-      }).join('') + '</div>';
-    }
-
     var pills = REACTIONS.map(function (e) {
       var who = reactions[e] || [];
       var isMine = who.indexOf(mine) !== -1;
@@ -891,26 +953,70 @@
       return '<button class="react-pill' + (isMine ? ' mine' : '') + '" data-mid="' + m.id + '" data-emoji="' + e + '">' +
              e + ' ' + who.length + '</button>';
     }).join('');
-    return '<div class="msg-reactions">' + pills + '<button class="react-add" data-mid="' + m.id + '">😊+</button></div>';
+    return pills ? '<div class="msg-reactions">' + pills + '</div>' : '';
   }
 
   function renderReplyQuote(m) {
     if (!m.replyTo) return '';
     var orig = chatMessages.filter(function (x) { return x.id === m.replyTo; })[0];
     if (!orig) return '<div class="reply-quote" data-scrollto="' + m.replyTo + '"><b>Ответ на сообщение</b></div>';
-    var preview = orig.type === 'video' ? '🎥 видео' : (orig.text || '').slice(0, 80);
+    var preview = orig.type === 'video' ? '🎥 видео' : orig.type === 'image' ? '🖼 фото' : orig.type === 'file' ? '📎 ' + (orig.attachName || 'файл') : (orig.text || '').slice(0, 80);
     return '<div class="reply-quote" data-scrollto="' + orig.id + '"><b>' + esc(participantName(orig.participantId)) + '</b><span>' + esc(preview) + '</span></div>';
+  }
+
+  /* Упоминания @Имя — подсветка в тексте сообщения (см. также
+     mention-menu в композере ниже, вставляющий их при наборе). Список
+     имён — из тех же четырёх участников, что и everywhere; экранируем
+     регэксп-спецсимволы на случай, если имя когда-нибудь их получит.
+     Более длинные имена проверяются первыми, чтобы "Иван" не съедал
+     префикс "Иванов", если такое имя появится. */
+  function renderTextWithMentions(text) {
+    text = text || '';
+    var names = (state.participants || []).map(function (p) { return p.name; })
+      .filter(Boolean).sort(function (a, b) { return b.length - a.length; });
+    if (!names.length) return esc(text);
+    var pattern = names.map(function (n) { return n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }).join('|');
+    var re = new RegExp('@(' + pattern + ')(?![а-яёА-ЯЁa-zA-Z])', 'g');
+    var out = '', last = 0, m;
+    while ((m = re.exec(text))) {
+      out += esc(text.slice(last, m.index));
+      out += '<span class="mention">@' + esc(m[1]) + '</span>';
+      last = m.index + m[0].length;
+    }
+    out += esc(text.slice(last));
+    return out;
+  }
+
+  function formatFileSize(bytes) {
+    if (!bytes) return '';
+    var kb = Math.round(bytes / 1024);
+    return kb > 1024 ? (kb / 1024).toFixed(1) + ' МБ' : kb + ' КБ';
   }
 
   function renderMessageBody(m, time) {
     if (m.type === 'video') {
       var thumb = m.videoThumb ? '<img src="' + m.videoThumb + '" alt="">' : '<div class="chat-vid-noimg">▶</div>';
       var reps = m.videoReps ? '<span class="chat-vid-reps">' + m.videoReps + ' повт.</span>' : '';
-      var caption = m.text ? '<div class="bubble-text">' + esc(m.text) + '<span class="msg-time-inline">' + time + '</span></div>' : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + '</div>';
+      var caption = m.text ? '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>' : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + '</div>';
       return '<button class="chat-vid-card" data-play="' + m.videoPath + '" data-who="' + esc(participantName(m.participantId)) + '" data-reps="' + (m.videoReps || '') + '">' +
              thumb + '<span class="chat-vid-play">▶</span>' + reps + '</button>' + caption;
     }
-    return '<div class="bubble-text">' + esc(m.text) + '<span class="msg-time-inline">' + time + (m.pending ? ' · отправка…' : '') + '</span></div>';
+    if (m.type === 'image') {
+      var imgCaption = m.text
+        ? '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>'
+        : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + (m.pending ? ' · отправка…' : '') + '</div>';
+      var imgInner = m.localPreview ? '<img src="' + m.localPreview + '" alt="">' : '<div class="chat-img-spinner">⏳</div>';
+      return '<div class="chat-img-card" data-attach-path="' + esc(m.attachPath || '') + '">' + imgInner + '</div>' + imgCaption;
+    }
+    if (m.type === 'file') {
+      var sizeStr = formatFileSize(m.attachSize) + (m.pending ? ' · отправка…' : '');
+      return '<button class="chat-file-card" data-attach-path="' + esc(m.attachPath || '') + '">' +
+               '<span class="chat-file-icon">📄</span>' +
+               '<span class="chat-file-info"><span class="chat-file-name">' + esc(m.attachName || 'Файл') + '</span>' +
+               '<span class="chat-file-size">' + sizeStr + '</span></span>' +
+             '</button><span class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + '</span>';
+    }
+    return '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + (m.pending ? ' · отправка…' : '') + '</span></div>';
   }
 
   function renderChat() {
@@ -925,12 +1031,16 @@
       return;
     }
 
+    closeMessageMenu(); // список может пересобраться под открытым меню — не оставляем меню "повисшим"
+
     var log = $('#chat-log');
     /* Тот же нюанс, что и в scrollChatToBottom(): у #chat-log нет
        своего overflow, скроллится вся страница (окно), не div. */
     var wasAtBottom = (document.body.scrollHeight - window.scrollY - window.innerHeight) < 80;
 
     var divider = computeUnreadDivider(myId);
+
+    log.classList.toggle('selecting', selectMode);
 
     var lastDay = '';
     log.innerHTML = chatMessages.map(function (m, i) {
@@ -952,22 +1062,25 @@
       var senderHtml = (isGroupStart && !mine)
         ? '<div class="msg-sender-inline" style="color:' + participantColor(m.participantId) + '">' + esc(participantName(m.participantId)) + '</div>'
         : '';
-      var replyBtn = m.pending ? '' : '<button class="reply-btn" data-mid="' + m.id + '" title="Ответить">↩</button>';
 
-      var rowCls = 'msg-row' + (mine ? ' mine' : '') + (isGroupStart ? ' group-start' : '');
+      var selected = !!selectedIds[m.id];
+      var checkHtml = (selectMode && !m.pending) ? '<div class="msg-select-check' + (selected ? ' checked' : '') + '"></div>' : '';
+
+      var rowCls = 'msg-row' + (mine ? ' mine' : '') + (isGroupStart ? ' group-start' : '') + (selected ? ' selected' : '');
       var bubbleCls = 'bubble' + (mine ? ' out' : ' in') + (m.pending ? ' pending' : '');
 
       return sep +
-        '<div class="' + rowCls + '" id="msg-' + m.id + '">' + avatarHtml +
+        '<div class="' + rowCls + '" id="msg-' + m.id + '" data-mid="' + m.id + '">' + checkHtml + avatarHtml +
           '<div class="msg-col">' +
-            '<div class="' + bubbleCls + '">' + replyBtn + senderHtml + renderReplyQuote(m) + renderMessageBody(m, time) + '</div>' +
+            '<div class="' + bubbleCls + '" data-mid="' + m.id + '">' + senderHtml + renderReplyQuote(m) + renderMessageBody(m, time) + '</div>' +
             (m.pending ? '' : renderReactions(m)) +
           '</div>' +
         '</div>';
     }).join('');
 
     log.querySelectorAll('.reply-quote[data-scrollto]').forEach(function (b) {
-      b.addEventListener('click', function () {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
         var target = document.getElementById('msg-' + b.dataset.scrollto);
         if (!target) return;
         target.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -976,31 +1089,251 @@
       });
     });
 
-    log.querySelectorAll('.reply-btn').forEach(function (b) {
-      b.addEventListener('click', function () { startReply(b.dataset.mid); });
-    });
+    /* Открытие видео/фото/файла теперь целиком идёт через
+       wireMessagePress ниже (единая логика короткий тап/зажатие для
+       всех вложений) — отдельного click-слушателя на [data-play] тут
+       больше нет, иначе клик срабатывал бы дважды. */
+    loadChatImages(log);
 
-    log.querySelectorAll('[data-play]').forEach(function (b) {
-      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who, b.dataset.reps); });
-    });
-    log.querySelectorAll('.react-pill, .react-choice').forEach(function (b) {
-      b.addEventListener('click', function () {
-        reactionPickerFor = null;
+    log.querySelectorAll('.react-pill').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
         Storage.chat.react(myId, b.dataset.mid, b.dataset.emoji).then(function (updated) {
           var m = chatMessages.filter(function (x) { return x.id === b.dataset.mid; })[0];
           if (m) m.reactions = updated.reactions;
           renderChat();
-        }).catch(function (e) { PCLog.warn('Реакция не отправилась: ' + e.message); });
-      });
-    });
-    log.querySelectorAll('.react-add').forEach(function (b) {
-      b.addEventListener('click', function () {
-        reactionPickerFor = (reactionPickerFor === b.dataset.mid) ? null : b.dataset.mid;
-        renderChat();
+        }).catch(function (e2) { PCLog.warn('Реакция не отправилась: ' + e2.message); });
       });
     });
 
+    /* Тап по строке — либо переключает выбор (в режиме выбора), либо
+       открывает меню действий. Зажатие (долгий тап) на пузыре сразу
+       включает режим выбора, минуя меню — так же, как в референсе. */
+    log.querySelectorAll('.msg-row[data-mid]').forEach(function (row) {
+      var mid = row.dataset.mid;
+      var mObj = chatMessages.filter(function (x) { return x.id === mid; })[0];
+      if (!mObj || mObj.pending) return;
+      var bubbleEl = row.querySelector('.bubble');
+      wireMessagePress(row, bubbleEl, mObj);
+    });
+
     if (wasAtBottom) window.scrollTo(0, document.body.scrollHeight);
+    renderSelectBar();
+  }
+
+  /* Долгое нажатие через таймер + отмена при заметном сдвиге пальца
+     (иначе обычный скролл ленты воспринимался бы как зажатие). Работает
+     и с touch, и с мышью (Pointer Events — один код для обоих). */
+  function wireMessagePress(row, bubbleEl, m) {
+    var pressTimer = null;
+    var startX = 0, startY = 0, longPressed = false;
+
+    function cancelPress() {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+
+    /* Реакция-чип и цитата ответа — целиком свои, у них уже есть
+       собственные click-обработчики (переключить реакцию / проскроллить
+       к оригиналу) — зажатие/тап по строке их не трогает вообще.
+       Видео/фото/файл — наоборот, участвуют в общей логике: короткий
+       тап открывает контент напрямую (плеер/просмотр/скачивание) вместо
+       меню, а зажатие на них так же включает выбор, как и на любом
+       другом месте пузыря. */
+    function isOwnControl(e) { return !!e.target.closest('.react-pill, .reply-quote'); }
+    function attachTarget(e) { return e.target.closest('.chat-vid-card, .chat-img-card, .chat-file-card'); }
+
+    row.addEventListener('pointerdown', function (e) {
+      longPressed = false;
+      if (e.button !== undefined && e.button !== 0) return; // только левая кнопка/тач
+      if (isOwnControl(e)) return;
+      startX = e.clientX; startY = e.clientY;
+      pressTimer = setTimeout(function () {
+        longPressed = true;
+        pressTimer = null;
+        if (navigator.vibrate) navigator.vibrate(15);
+        if (!selectMode) enterSelectMode(m.id);
+        else toggleSelect(m.id);
+      }, LONG_PRESS_MS);
+    });
+    row.addEventListener('pointermove', function (e) {
+      if (!pressTimer) return;
+      if (Math.abs(e.clientX - startX) > LONG_PRESS_MOVE_TOLERANCE || Math.abs(e.clientY - startY) > LONG_PRESS_MOVE_TOLERANCE) {
+        cancelPress();
+      }
+    });
+    row.addEventListener('pointerup', function (e) {
+      var wasLong = longPressed;
+      cancelPress();
+      if (isOwnControl(e)) return;
+      if (wasLong) return; // уже обработано в таймере
+      if (selectMode) { toggleSelect(m.id); return; }
+      var att = attachTarget(e);
+      if (att) { openAttachment(m, att); return; }
+      if (bubbleEl) openMessageMenu(m, bubbleEl);
+    });
+    row.addEventListener('pointercancel', cancelPress);
+    row.addEventListener('pointerleave', cancelPress);
+  }
+
+  /* ============================================================
+     Меню действий сообщения — полоса быстрых реакций сверху + список
+     действий (Ответить / Копировать / Выбрать / Удалить), точь-в-точь
+     последовательность действий как в Telegram Web: короткий тап по
+     пузырю. Это отдельный слой поверх всего (position:fixed,
+     аппендится в body), а не часть innerHTML ленты — так его не сносит
+     очередной renderChat() при приходе нового сообщения, а закрытие
+     общее для скролла/новых сообщений через closeMessageMenu().
+     ============================================================ */
+  function closeMessageMenu() {
+    if (!messageMenuEls) return;
+    messageMenuEls.forEach(function (el) { el.remove(); });
+    messageMenuEls = null;
+    window.removeEventListener('scroll', closeMessageMenu);
+    window.removeEventListener('resize', closeMessageMenu);
+  }
+
+  function openMessageMenu(m, bubbleEl) {
+    closeMessageMenu();
+    var myIdVal = myId();
+    var mine = m.participantId === myIdVal;
+    var canCopy = m.type !== 'video' && m.type !== 'image' && m.type !== 'file';
+
+    var backdrop = document.createElement('div');
+    backdrop.className = 'msg-menu-backdrop';
+
+    var panel = document.createElement('div');
+    panel.className = 'msg-menu-panel';
+    panel.innerHTML =
+      '<div class="msg-quick-reactions">' + REACTIONS.map(function (e) {
+        return '<button class="quick-react" data-emoji="' + e + '">' + e + '</button>';
+      }).join('') + '</div>' +
+      '<div class="msg-context-menu">' +
+        '<button data-act="reply">↩ Ответить</button>' +
+        (canCopy ? '<button data-act="copy">📋 Копировать</button>' : '') +
+        '<button data-act="select">☑️ Выбрать</button>' +
+        (mine ? '<button data-act="delete" class="danger">🗑 Удалить</button>' : '') +
+      '</div>';
+
+    document.body.appendChild(backdrop);
+    document.body.appendChild(panel);
+    messageMenuEls = [backdrop, panel];
+
+    var rect = bubbleEl.getBoundingClientRect();
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var panelRect = panel.getBoundingClientRect();
+    var left = mine ? rect.right - panelRect.width : rect.left;
+    left = Math.max(8, Math.min(left, vw - panelRect.width - 8));
+    var top = rect.bottom + 8;
+    if (top + panelRect.height > vh - 8) top = rect.top - panelRect.height - 8;
+    if (top < 8) top = 8;
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+
+    backdrop.addEventListener('click', closeMessageMenu);
+    window.addEventListener('scroll', closeMessageMenu, { passive: true });
+    window.addEventListener('resize', closeMessageMenu);
+
+    panel.querySelectorAll('.quick-react').forEach(function (b) {
+      b.addEventListener('click', function () {
+        closeMessageMenu();
+        Storage.chat.react(myIdVal, m.id, b.dataset.emoji).then(function (updated) {
+          var mm = chatMessages.filter(function (x) { return x.id === m.id; })[0];
+          if (mm) mm.reactions = updated.reactions;
+          renderChat();
+        }).catch(function (e) { PCLog.warn('Реакция не отправилась: ' + e.message); });
+      });
+    });
+    panel.querySelectorAll('[data-act]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var act = b.dataset.act;
+        closeMessageMenu();
+        if (act === 'reply') startReply(m.id);
+        else if (act === 'copy') copyMessageText(m);
+        else if (act === 'select') enterSelectMode(m.id);
+        else if (act === 'delete') confirmDeleteMessage(m);
+      });
+    });
+  }
+
+  function copyMessageText(m) {
+    var text = m.text || '';
+    if (!text) return;
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+      .catch(function () {
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        ta.remove();
+      });
+  }
+
+  function confirmDeleteMessage(m) {
+    if (!confirm('Удалить сообщение без возможности восстановить?')) return;
+    var myIdVal = myId();
+    Storage.chat.delete(myIdVal, m.id).then(function () {
+      chatRemoveLocal(m.id);
+      renderChat();
+    }).catch(function (e) { PCLog.error('Не удалось удалить сообщение: ' + e.message); alert('Не получилось удалить: ' + e.message); });
+  }
+
+  /* ---------- режим множественного выбора (зажатие) ---------- */
+  function enterSelectMode(mid) {
+    selectMode = true;
+    selectedIds = {};
+    if (mid) selectedIds[mid] = true;
+    renderChat();
+  }
+  function exitSelectMode() {
+    selectMode = false;
+    selectedIds = {};
+    renderChat();
+  }
+  function toggleSelect(mid) {
+    if (selectedIds[mid]) delete selectedIds[mid]; else selectedIds[mid] = true;
+    renderChat();
+  }
+
+  function renderSelectBar() {
+    var bar = $('#chat-select-bar');
+    if (!bar) return;
+    var n = Object.keys(selectedIds).length;
+    bar.hidden = !selectMode;
+    $('#chat-form').classList.toggle('hidden-by-select', selectMode);
+    $('#chat-select-count').textContent = n + ' ' + plural(n, 'выбрано', 'выбрано', 'выбрано');
+    var myIdVal = myId();
+    var allMine = n > 0 && Object.keys(selectedIds).every(function (id) {
+      var m = chatMessages.filter(function (x) { return x.id === id; })[0];
+      return m && m.participantId === myIdVal;
+    });
+    $('#chat-select-delete').disabled = !allMine;
+    $('#chat-select-copy').disabled = n === 0;
+  }
+
+  function copySelectedMessages() {
+    var ids = Object.keys(selectedIds);
+    var texts = chatMessages
+      .filter(function (m) { return ids.indexOf(m.id) !== -1; })
+      .sort(function (a, b) { return (a.at || '') < (b.at || '') ? -1 : 1; })
+      .map(function (m) { return participantName(m.participantId) + ': ' + (m.text || (m.type === 'video' ? '🎥 видео' : m.type === 'image' ? '🖼 фото' : m.type === 'file' ? '📎 файл' : '')); });
+    if (!texts.length) return;
+    (navigator.clipboard ? navigator.clipboard.writeText(texts.join('\n')) : Promise.reject()).catch(function () {});
+    exitSelectMode();
+  }
+
+  function deleteSelectedMessages() {
+    var ids = Object.keys(selectedIds);
+    if (!ids.length) return;
+    if (!confirm('Удалить ' + ids.length + ' ' + plural(ids.length, 'сообщение', 'сообщения', 'сообщений') + '?')) return;
+    var myIdVal = myId();
+    Promise.all(ids.map(function (id) {
+      return Storage.chat.delete(myIdVal, id).then(function () { chatRemoveLocal(id); }).catch(function (e) {
+        PCLog.warn('Не удалось удалить ' + id + ': ' + e.message);
+      });
+    })).then(function () {
+      exitSelectMode();
+    });
   }
 
   function esc(s) {
@@ -1009,8 +1342,14 @@
     return d.innerHTML;
   }
 
-  function chatMerge(items) {
-    if (!items || !items.length) return false;
+  /* isFullSet — это полный список с сервера (не since-довесок): такой
+     присылает раз в 4 тика обычный опрос (см. pollChat) и всегда —
+     Storage.chat.fetch(null). Только в этом случае можно надёжно
+     сказать, что сообщение, которого нет в ответе, но есть локально,
+     было удалено — при since-опросе его отсутствие ничего не значит,
+     сервер просто не отдаёт то, что было раньше курсора. */
+  function chatMerge(items, isFullSet) {
+    if (!items) return false;
     var byId = {};
     chatMessages.forEach(function (m) { byId[m.id] = m; });
     var changed = false;
@@ -1026,11 +1365,33 @@
         changed = true;
       }
     });
+    if (isFullSet) {
+      var serverIds = {};
+      items.forEach(function (m) { serverIds[m.id] = true; });
+      var before = chatMessages.length;
+      /* m.pending — сообщение ещё в процессе собственной отправки,
+         сервер о нём знать не может, не трогаем. */
+      chatMessages = chatMessages.filter(function (m) { return m.pending || serverIds[m.id]; });
+      if (chatMessages.length !== before) changed = true;
+    }
     if (changed) {
       chatMessages.sort(function (a, b) { return (a.at || '') < (b.at || '') ? -1 : 1; });
       Storage.chat.writeCache(chatMessages);
     }
     return changed;
+  }
+
+  /* Удаление одного сообщения по событию из реального времени — не
+     полагаемся на очередной полный опрос, чтобы оно пропало у
+     остальных сразу, как и было отправлено (см. action_delete_message
+     в backend/index.py, публикует {type:'delete', id}). */
+  function chatRemoveLocal(messageId) {
+    var before = chatMessages.length;
+    chatMessages = chatMessages.filter(function (m) { return m.id !== messageId; });
+    if (chatMessages.length === before) return false;
+    Storage.chat.writeCache(chatMessages);
+    delete selectedIds[messageId];
+    return true;
   }
 
   var chatPollCount = 0;
@@ -1053,7 +1414,7 @@
       var newFromOthers = items.filter(function (m) {
         return !chatMessages.some(function (x) { return x.id === m.id; }) && m.participantId !== myId;
       });
-      var changed = chatMerge(items);
+      var changed = chatMerge(items, fullPoll);
       if (changed) {
         var onChatTab = document.getElementById('v-chat').classList.contains('on');
         if (onChatTab && !document.hidden) {
@@ -1106,7 +1467,16 @@
       var sub = client.newSubscription(r.channel);
       sub.on('publication', function (ctx) {
         var data = ctx.data;
-        if (!data || !data.message) return;
+        if (!data) return;
+
+        if (data.type === 'delete' && data.id) {
+          if (chatRemoveLocal(data.id)) {
+            closeMessageMenu();
+            if (document.getElementById('v-chat').classList.contains('on') && !document.hidden) renderChat();
+          }
+          return;
+        }
+        if (!data.message) return;
         /* chatMerge сама разбирается, новое это сообщение или
            обновление реакций на уже известном — один и тот же путь
            для обоих типов событий с бэкенда. */
@@ -1188,7 +1558,9 @@
     try {
       var last = items[items.length - 1];
       var title = items.length > 1 ? ('Чат ПЦ Спорт · ' + items.length + ' новых') : ('Чат ПЦ Спорт · ' + participantName(last.participantId));
-      var n = new Notification(title, { body: last.text, tag: 'pcsport-chat' });
+      var body = last.type === 'video' ? '🎥 видео' : last.type === 'image' ? '🖼 фото' :
+        last.type === 'file' ? '📎 ' + (last.attachName || 'файл') : last.text;
+      var n = new Notification(title, { body: body, tag: 'pcsport-chat' });
       n.onclick = function () { window.focus(); };
     } catch (e) { PCLog.warn('Notification: ' + e.message); }
   }
@@ -1218,6 +1590,154 @@
     });
   }
 
+  var ATTACH_MAX_SIZE = 30 * 1024 * 1024; // держим в шаге с ATTACH_MAX_SIZE в backend/index.py
+
+  /* Скрепка — «Фото или видео» / «Файл». Та же оптимистичная схема, что
+     и у обычного текста (см. sendChatMessage): сразу показываем
+     сообщение локально (для фото — с превью через object URL, оно не
+     требует сети и живёт мгновенно), грузим в фоне, подменяем на
+     подтверждённое от сервера. type — 'image' или 'file', определяется
+     тем, через какой пункт меню файл выбрали (см. #attach-menu). */
+  /* ============================================================
+     Автодополнение @упоминаний в поле ввода — по образцу Telegram Web:
+     напечатал "@" (плюс необязательно начало имени) — сверху композера
+     всплывает список подходящих участников, тап вставляет "@Имя ".
+     Список из тех же четырёх известных участников, что и everywhere —
+     без произвольных юзернеймов, их тут просто нет.
+     ============================================================ */
+  var mentionState = null; // {start, end} — где в тексте сидит текущий "@запрос", пока меню открыто
+
+  function findMentionQuery(text, caret) {
+    var head = text.slice(0, caret);
+    var m = /@([А-Яа-яЁё]*)$/.exec(head);
+    if (!m) return null;
+    return { start: m.index, end: caret, query: m[1].toLowerCase() };
+  }
+
+  function updateMentionMenu() {
+    var input = $('#chat-text');
+    var q = findMentionQuery(input.value, input.selectionStart || 0);
+    var menu = $('#mention-menu');
+    if (!q) { mentionState = null; menu.hidden = true; return; }
+
+    var matches = (state.participants || []).filter(function (p) {
+      return p.name.toLowerCase().indexOf(q.query) === 0;
+    });
+    if (!matches.length) { mentionState = null; menu.hidden = true; return; }
+
+    mentionState = q;
+    menu.innerHTML = matches.map(function (p) {
+      return '<button type="button" data-pid="' + p.id + '">' +
+        '<span class="mention-avatar" style="background:' + participantColor(p.id) + '">' + participantInitial(p.id) + '</span>' +
+        '<span>' + esc(p.name) + '</span></button>';
+    }).join('');
+    menu.hidden = false;
+    menu.querySelectorAll('[data-pid]').forEach(function (b) {
+      /* mousedown, не click — иначе blur поля ввода (см. ниже) успевает
+         спрятать меню раньше, чем долетит клик по кнопке. */
+      b.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        insertMention(matches.filter(function (p) { return p.id === b.dataset.pid; })[0]);
+      });
+    });
+  }
+
+  function insertMention(p) {
+    if (!p || !mentionState) return;
+    var input = $('#chat-text');
+    var text = input.value;
+    var insert = '@' + p.name + ' ';
+    input.value = text.slice(0, mentionState.start) + insert + text.slice(mentionState.end);
+    var pos = mentionState.start + insert.length;
+    input.setSelectionRange(pos, pos);
+    input.focus();
+    closeMentionMenu();
+  }
+
+  function closeMentionMenu() {
+    mentionState = null;
+    var menu = $('#mention-menu');
+    if (menu) { menu.hidden = true; menu.innerHTML = ''; }
+  }
+
+  /* ============================================================
+     Эмодзи-панель — большой список без раздела «часто используемые»
+     (по прямому запросу, попроще, чем в Telegram). Вставляет эмодзи в
+     позицию курсора в поле ввода, панель после вставки не закрывается —
+     можно подряд натыкать несколько, как обычно и делают.
+     ============================================================ */
+  var EMOJI_LIST = [
+    '😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊','😋','😎','😍','😘','🥰','😗',
+    '😙','😚','🙂','🤗','🤩','🤔','🤨','😐','😑','😶','🙄','😏','😣','😥','😮','🤐',
+    '😯','😪','😫','🥱','😴','😌','😛','😜','😝','🤤','😒','😓','😔','😕','🙃','🤑',
+    '😲','☹️','🙁','😖','😞','😟','😤','😢','😭','😦','😧','😨','😩','🤯','😬','😰',
+    '😱','🥵','🥶','😳','🤪','😵','🥴','😠','😡','🤬','😷','🤒','🤕','🤢','🤮','🥳',
+    '🥺','🤠','🤡','🥸','🤫','🤭','🧐','🤓','😈','👿','💀','👻','👽','🤖','💩','😺',
+    '😸','😹','😻','😼','😽','🙀','😿','😾','👍','👎','👊','✊','🤛','🤜','🤞','✌️',
+    '🤟','🤘','👌','🤌','🤏','👈','👉','👆','👇','☝️','✋','🤚','🖐️','🖖','👋','🤙',
+    '💪','🦾','🖕','✍️','🙏','🤝','👏','🙌','👐','🤲','🫡','🫶','❤️','🧡','💛','💚',
+    '💙','💜','🖤','🤍','🤎','💔','❤️‍🔥','❤️‍🩹','💕','💞','💓','💗','💖','💘','💝','💟',
+    '🔥','✨','⭐','🌟','💫','💥','💯','💢','💦','💨','🕳️','💣','💬','👁️‍🗨️','🗨️','🗯️',
+    '⚡','☀️','🌤️','⛅','🌧️','⛈️','❄️','☃️','🌈','🎉','🎊','🎁','🏆','🥇','🎯','🚀'
+  ];
+
+  function toggleEmojiPicker() {
+    var panel = $('#emoji-picker');
+    if (!panel.hidden) { panel.hidden = true; return; }
+    panel.innerHTML = EMOJI_LIST.map(function (e) { return '<button type="button">' + e + '</button>'; }).join('');
+    panel.hidden = false;
+    panel.querySelectorAll('button').forEach(function (b) {
+      b.addEventListener('click', function () { insertEmoji(b.textContent); });
+    });
+  }
+  function closeEmojiPicker() { $('#emoji-picker').hidden = true; }
+
+  function insertEmoji(emoji) {
+    var input = $('#chat-text');
+    var start = input.selectionStart || input.value.length;
+    var end = input.selectionEnd || input.value.length;
+    input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+    var pos = start + emoji.length;
+    input.setSelectionRange(pos, pos);
+    input.focus();
+  }
+
+  function sendChatAttachment(file, type) {
+    var myIdVal = myId();
+    if (!file || !myIdVal) return Promise.resolve();
+    if (file.size > ATTACH_MAX_SIZE) {
+      alert('Файл больше ' + Math.round(ATTACH_MAX_SIZE / 1024 / 1024) + ' МБ — для длинных видео есть отдельная кнопка «Видео дня».');
+      return Promise.resolve();
+    }
+    var tempId = 'tmp-' + Date.now();
+    var replyToId = replyingTo ? replyingTo.id : null;
+    var localPreview = (type === 'image' && window.URL) ? URL.createObjectURL(file) : null;
+    var optimistic = {
+      id: tempId, participantId: myIdVal, text: '', type: type, at: new Date().toISOString(), pending: true,
+      replyTo: replyToId, attachName: file.name, attachSize: file.size, attachMime: file.type, localPreview: localPreview
+    };
+    chatMessages.push(optimistic);
+    clearReply();
+    renderChat();
+    window.scrollTo(0, document.body.scrollHeight);
+
+    return Storage.chat.uploadAttachment(myIdVal, file, null).then(function (up) {
+      return Storage.chat.sendAttachment(myIdVal, type, {
+        path: up.path, name: file.name, mime: file.type || up.contentType, size: file.size
+      }, replyToId, tempId);
+    }).then(function (msg) {
+      chatMessages = chatMessages.filter(function (m) { return m.id !== tempId; });
+      chatMerge([msg]);
+      renderChat();
+      if (localPreview) URL.revokeObjectURL(localPreview);
+    }).catch(function (e) {
+      PCLog.error('Чат: файл не отправился — ' + e.message);
+      var m = chatMessages.filter(function (x) { return x.id === tempId; })[0];
+      if (m) { m.pending = false; m.failed = true; m.attachName = (m.attachName || 'файл') + ' [не отправлено]'; }
+      renderChat();
+    });
+  }
+
   function startReply(messageId) {
     var m = chatMessages.filter(function (x) { return x.id === messageId; })[0];
     if (!m) return;
@@ -1237,7 +1757,8 @@
     if (!bar) return;
     if (!replyingTo) { bar.hidden = true; bar.innerHTML = ''; return; }
     var name = participantName(replyingTo.participantId);
-    var preview = replyingTo.type === 'video' ? '🎥 видео' : (replyingTo.text || '').slice(0, 80);
+    var preview = replyingTo.type === 'video' ? '🎥 видео' : replyingTo.type === 'image' ? '🖼 фото' :
+      replyingTo.type === 'file' ? '📎 ' + (replyingTo.attachName || 'файл') : (replyingTo.text || '').slice(0, 80);
     bar.hidden = false;
     bar.innerHTML = '<div class="reply-bar-txt"><b>' + esc(name) + '</b><br>' + esc(preview) + '</div><button id="chat-reply-cancel">✕</button>';
     $('#chat-reply-cancel').addEventListener('click', clearReply);
@@ -1354,35 +1875,15 @@
   /* Коротко, по 2-4 пункта на версию, только заметное человеку —
      полная история со всеми техническими деталями в README.md проекта.
      Обновлять при каждом бампе версии в шапке. */
+  /* Только текущая версия — по прямому запросу, полную историю хранить
+     тут смысла нет (она и так вся есть в README.md, для читателя
+     приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v45', items: [
-      'Чат переехал с Яндекс.Диска на быструю базу прямо на своей виртуалке — сохранение сообщения теперь не поход в чужое облако'
-    ] },
-    { v: 'v44', items: [
-      'Чат реально ускорен: доставка через Centrifugo раньше ждала в очереди позади рассылки push-уведомлений — поменял порядок',
-      'Можно печатать и отправлять следующее сообщение, не дожидаясь, пока предыдущее подтвердится (как в WhatsApp)'
-    ] },
-    { v: 'v43', items: [
-      'Чат: сообщения и реакции теперь долетают мгновенно (своя виртуалка с Centrifugo), не ждут опроса раз в 8 секунд',
-      'Опрос оставлен как подстраховка на фоне — если реальное время недоступно, чат тихо продолжает работать как раньше'
-    ] },
-    { v: 'v42', items: [
-      'Критично: отметки нормы иногда пропадали при почти одновременной отправке с разных телефонов — починено',
-      'То же самое чинит и кнопка «Обновить»'
-    ] },
-    { v: 'v41', items: [
-      'Чат: поле ввода сообщения больше не убегает при открытии клавиатуры',
-      'Настройки: компактнее — карточки участников и выбор идентичности занимают меньше места',
-      'Кнопка «Обновить» теперь честно показывает результат и не крутится дольше 15 секунд',
-      'Уведомления перенесены в самый верх настроек'
-    ] },
-    { v: 'v40', items: [
-      'Починены дубли сообщений в чате (уходили по 3-4 раза при сбое сети)',
-      'У своих сообщений в чате убран лишний аватар',
-      'Тёмный фон вкладки чата теперь доходит до самого низа экрана'
-    ] },
-    { v: 'v39', items: [
-      'Оформление чата переделано в стиле Telegram — пузыри, группировка, реакции, ответы'
+    { v: 'v46', items: [
+      'Отметки в журнале, счёт и правила тоже переехали с Диска на виртуалку — весь челлендж теперь на своей базе',
+      'Чат оформлен по образцу Telegram: тап по сообщению открывает меню (ответить/копировать/выбрать/удалить) с быстрыми реакциями сверху, зажатие включает выбор нескольких сразу',
+      'Скрепка — можно прислать фото, видео или файл прямо в чат',
+      'Упоминания @Имя с автодополнением и подсветкой, большая панель эмодзи в поле ввода'
     ] }
   ];
 
@@ -1566,6 +2067,77 @@
          одновременно "в полёте" отслеживаются корректно и без этого
          флага, как в любом нормальном мессенджере. */
       sendChatMessage(text);
+    });
+
+    $('#chat-select-cancel').addEventListener('click', exitSelectMode);
+    $('#chat-select-copy').addEventListener('click', copySelectedMessages);
+    $('#chat-select-delete').addEventListener('click', deleteSelectedMessages);
+
+    /* Скрепка — тот же паттерн, что и меню сообщения: тап открывает
+       маленькое всплывающее меню с двумя пунктами (по референсу
+       Telegram Web, без «Список» — не нужен для этого приложения),
+       выбор пункта открывает системный выбор файла нужного типа. */
+    $('#chat-attach-btn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      var menu = $('#attach-menu');
+      if (!menu.hidden) { menu.hidden = true; return; }
+      menu.hidden = false;
+      var closeOnce = function (ev) {
+        if (!menu.contains(ev.target) && ev.target !== $('#chat-attach-btn')) {
+          menu.hidden = true;
+          document.removeEventListener('click', closeOnce);
+        }
+      };
+      setTimeout(function () { document.addEventListener('click', closeOnce); }, 0);
+    });
+    $('#chat-emoji-btn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      closeMentionMenu();
+      var wasHidden = $('#emoji-picker').hidden;
+      toggleEmojiPicker();
+      if (wasHidden) {
+        var panel = $('#emoji-picker');
+        var closeOnce = function (ev) {
+          if (!panel.contains(ev.target) && ev.target !== $('#chat-emoji-btn')) {
+            closeEmojiPicker();
+            document.removeEventListener('click', closeOnce);
+          }
+        };
+        setTimeout(function () { document.addEventListener('click', closeOnce); }, 0);
+      }
+    });
+
+    $('#attach-menu [data-attach="media"]').addEventListener('click', function () {
+      $('#attach-menu').hidden = true;
+      $('#attach-input-media').click();
+    });
+    $('#attach-menu [data-attach="file"]').addEventListener('click', function () {
+      $('#attach-menu').hidden = true;
+      $('#attach-input-file').click();
+    });
+    $('#attach-input-media').addEventListener('change', function () {
+      var file = this.files[0];
+      this.value = '';
+      if (!file) return;
+      var type = file.type && file.type.indexOf('image/') === 0 ? 'image' : 'file';
+      sendChatAttachment(file, type);
+    });
+    $('#attach-input-file').addEventListener('change', function () {
+      var file = this.files[0];
+      this.value = '';
+      if (!file) return;
+      sendChatAttachment(file, 'file');
+    });
+
+    var chatTextEl = $('#chat-text');
+    chatTextEl.addEventListener('input', updateMentionMenu);
+    chatTextEl.addEventListener('click', updateMentionMenu);
+    chatTextEl.addEventListener('blur', function () {
+      // клик по самому пункту меню должен успеть отработать раньше скрытия
+      setTimeout(closeMentionMenu, 150);
+    });
+    chatTextEl.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeMentionMenu();
     });
 
     $('#cfg-notify').addEventListener('click', function () {

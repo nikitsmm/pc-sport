@@ -188,9 +188,9 @@
       };
       xhr.onload = function () {
         if (xhr.status >= 200 && xhr.status < 300) resolve();
-        else reject(new Error('Не удалось загрузить видео (HTTP ' + xhr.status + ')'));
+        else reject(new Error('Не удалось загрузить файл (HTTP ' + xhr.status + ')'));
       };
-      xhr.onerror = function () { reject(new Error('Сеть прервалась во время загрузки видео')); };
+      xhr.onerror = function () { reject(new Error('Сеть прервалась во время загрузки файла')); };
       xhr.send(blob);
     });
   }
@@ -599,6 +599,78 @@
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
         var r = await apiRetry(cfg.url, 'react_message', { participantId: participantId, messageId: messageId, emoji: emoji }, 3);
         return r.message;
+      },
+
+      /* Скрепка — «Фото или видео» / «Файл» (по образцу Telegram Web).
+         Тот же S3-бакет, что и «Видео дня» (см. Storage.video выше), но
+         своя папка attachments/ на бэкенде и более широкий набор
+         расширений — это просто приложенный файл, не зачётное видео
+         с повторами, не участвует в ретеншне/cleanup_old. */
+      uploadAttachment: async function (participantId, file, onProgress) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) {
+          throw new Error('Файлы можно отправлять только при включённой облачной синхронизации');
+        }
+        var ext = (file.name || '').split('.').pop() || 'bin';
+        var upMeta = await api(cfg.url, 'get_attachment_upload_url', {
+          participantId: participantId, ext: ext, size: file.size
+        });
+
+        /* Тот же 3-попыточный повтор с паузой, что и у видео (см.
+           Storage.video.upload) — мобильная сеть у этой четвёрки рвётся
+           регулярно (см. историю багов в README), а presigned-ссылка на
+           PUT живёт 30 минут, так что повтор почти всегда успевает. */
+        var attempts = 3, lastErr = null;
+        for (var i = 0; i < attempts; i++) {
+          try {
+            await putOnce(upMeta.uploadUrl, upMeta.contentType || file.type, file, onProgress, null);
+            lastErr = null;
+            break;
+          } catch (e) {
+            lastErr = e;
+            if (i < attempts - 1) await wait(2000 * (i + 1));
+          }
+        }
+        if (lastErr) throw lastErr;
+
+        return { path: upMeta.path, contentType: upMeta.contentType || file.type };
+      },
+
+      sendAttachment: async function (participantId, type, attach, replyTo, clientId) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) {
+          throw new Error('Чат работает только при включённой облачной синхронизации');
+        }
+        var r = await apiRetry(cfg.url, 'send_message', {
+          participantId: participantId, type: type, replyTo: replyTo || null, clientId: clientId || null,
+          attachPath: attach.path, attachName: attach.name, attachMime: attach.mime, attachSize: attach.size
+        }, 3);
+        return r.message;
+      },
+
+      /* Presigned-ссылка на просмотр/скачивание — та же механика, что и
+         у видео (Storage.video.playUrl), только путь общий для видео И
+         вложений (см. action_get_download_url в backend/index.py). */
+      attachmentUrl: async function (path) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        var d = await api(cfg.url, 'get_download_url', { path: path });
+        return d.url;
+      },
+
+      /* Удалить своё сообщение — сервер (chatstore) сам проверяет, что
+         participantId совпадает с автором, чужое отклонит 403-м. */
+      /* Без apiRetry намеренно — в отличие от send/react, удаление на
+         chatstore НЕ идемпотентно (второй DELETE того же id получит
+         404, раз строки уже нет). Автоповтор мог бы показать "не
+         получилось" пользователю ровно в момент, когда удаление уже
+         реально прошло, просто ответ не долетел. Один разовый запрос;
+         не получилось — пользователь видит ошибку и может нажать ещё
+         раз сам, это не тот сценарий, где секунды на счету. */
+      delete: async function (participantId, messageId) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        return api(cfg.url, 'delete_message', { participantId: participantId, messageId: messageId });
       },
 
       /* Токен на прямое подключение к Centrifugo (реальное время вместо
