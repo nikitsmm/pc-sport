@@ -30,8 +30,14 @@ h2{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:11.5px;fo
 .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;}
 
 /* ---------- шапка ---------- */
+/* Шапка + верхняя навигация закреплены наверху ВМЕСТЕ, одним
+   sticky-контейнером — так не нужно вручную высчитывать высоту appbar,
+   чтобы topnav "состыковался" под ней вторым sticky-элементом (это
+   было бы хрупко: любое изменение текста/шрифта в шапке сдвигало бы
+   реальную высоту, а число в CSS осталось бы прежним). */
+.header-sticky{position:sticky;top:0;z-index:30;}
 .appbar{
-  position:sticky;top:0;z-index:30;background:var(--ink);color:#fff;
+  background:var(--ink);color:#fff;
   padding:calc(10px + env(safe-area-inset-top,0px)) 16px 10px;
   display:flex;align-items:center;justify-content:space-between;gap:10px;
 }
@@ -156,8 +162,12 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
    видна группа [Журнал | Чат (+бейдж) | Настройки], на всех остальных
    экранах — ровно одна кнопка "← Назад", тот же элемент везде. */
 .topnav{background:var(--ink);display:flex;align-items:center;gap:8px;padding:0 16px 10px;}
-.topnav-back{background:transparent;border:0;color:#fff;font-family:"JetBrains Mono",monospace;
-  font-size:12.5px;font-weight:700;letter-spacing:.04em;padding:6px 4px;}
+/* Раньше был просто текст без фона — на тёмной шапке терялся почти до
+   невидимости. Теперь такая же по весу "пилюля", как у остальных
+   кнопок топнава, чтобы её невозможно было не заметить. */
+.topnav-back{background:#1E2A36;border:1px solid #33485C;color:#fff;font-family:"JetBrains Mono",monospace;
+  font-size:12.5px;font-weight:700;letter-spacing:.02em;padding:7px 14px;border-radius:11px;
+  display:flex;align-items:center;gap:4px;}
 .topnav-home-actions{display:flex;align-items:center;gap:8px;width:100%;}
 .topnav-journal{background:#1E2A36;border:1px solid #33485C;color:#9FB0BE;padding:6px 12px;
   font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.02em;
@@ -315,12 +325,19 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   --chat-primary:#8774E1; --chat-mine:#6C5DD3; --chat-text:#e8eaed; --chat-muted:#9aa0a8;
 }
 .view.on#v-chat{display:flex;flex-direction:column;min-height:calc(100vh - 230px);
-  background:var(--chat-bg);margin:0 -12px;padding:10px 12px calc(64px + var(--safe-b));color:var(--chat-text);}
+  background:var(--chat-bg);margin:0 -12px;padding:10px 12px calc(90px + var(--safe-b));color:var(--chat-text);}
 /* justify-content:flex-end — когда сообщений мало и они не заполняют
    всю высоту вкладки (flex:1 у самого контейнера), последний пузырь
    должен стоять прямо над полем ввода, а не прилипать к верху с
    пустотой под собой до самого композера. */
-.chat-log{flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding-bottom:70px;}
+/* padding-bottom с запасом: композер — position:fixed и физически
+   перекрывает нижнюю часть ленты независимо от прокрутки, а его
+   реальная высота (пузырь ввода + отступы формы) плюс safe-area внизу
+   экрана (до ~34px на iPhone с Face ID) в сумме больше, чем казалось —
+   было 70px без safe-area, последнее сообщение реально пряталось под
+   полем ввода. */
+.chat-log{flex:1;display:flex;flex-direction:column;justify-content:flex-end;
+  padding-bottom:calc(90px + var(--safe-b));}
 
 .chat-day{align-self:center;font-size:11.5px;font-weight:600;color:var(--chat-muted);
   background:rgba(127,127,127,.22);padding:4px 12px;margin:10px 0 6px;border-radius:12px;}
@@ -445,8 +462,9 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 /* Скрепка/эмодзи — тонкие монохромные иконки (SVG, currentColor), не
    цветные emoji-глифы: тон = var(--chat-muted), как приглушённые
    контурные иконки в Telegram, не сплошная заливка. */
-.chat-icon-btn{width:32px;height:38px;flex-shrink:0;padding:0;background:transparent;
-  color:var(--chat-muted);border-radius:50%;display:flex;align-items:center;justify-content:center;}
+.chat-icon-btn{width:32px;height:38px;flex-shrink:0;padding:0;background:transparent;border:0;
+  color:var(--chat-muted);border-radius:50%;display:flex;align-items:center;justify-content:center;
+  -webkit-appearance:none;appearance:none;}
 .chat-icon-btn:active{background:rgba(255,255,255,.08);}
 
 /* ---------- панель эмодзи над полем ввода ---------- */

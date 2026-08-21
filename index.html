@@ -18,15 +18,18 @@
 </head>
 <body>
 
+<div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v47 · 22.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v48 · 22.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
 </header>
 
 <!-- Верхняя навигация — заменила нижнюю панель вкладок. На "Сегодня"
-     видна группа кнопок, на всех остальных экранах — одна "← Назад". -->
+     видна группа кнопок, на всех остальных экранах — одна "← Назад".
+     Закреплена наверху вместе с шапкой (общий sticky-контейнер), не
+     уезжает при скролле — по прямому запросу. -->
 <div class="topnav" id="topnav">
   <button class="topnav-back" id="topnav-back" data-view="today" hidden>← Назад</button>
   <div class="topnav-home-actions" id="topnav-home-actions">
@@ -34,6 +37,8 @@
     <button class="topnav-chat" data-view="chat">💬 Чат<span class="chat-dot" id="chat-dot" hidden></span></button>
     <button class="topnav-settings" data-view="cfg" title="Настройки" aria-label="Настройки">⚙</button>
   </div>
+</div>
+</div>
 </div>
 
 <div class="rec-overlay" id="whoOverlay">
