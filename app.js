@@ -105,12 +105,76 @@
     var rec = state.days[date] && state.days[date][p.id];
     return rec ? rec.status : null;
   }
+  /* Тап по статусу — самое частое и самое важное изменение в
+     приложении, по прямому запросу пишется в облако СРАЗУ (не через
+     обычную задержку в 900 мс у commit()/flushSave, см. ниже), с явным
+     статусом "Записываю…/Записано/Ошибка записи" и настоящим откатом
+     конкретной записи (не всего state), если запись не удалась —
+     чтобы на экране никогда не оставалась галочка, которая на самом
+     деле не сохранилась. */
   function setStatus(p, date, status) {
+    var prevRec = state.days[date] ? state.days[date][p.id] : undefined;
+
     if (!state.days[date]) state.days[date] = {};
     if (!status) delete state.days[date][p.id];
     else state.days[date][p.id] = { status: status, at: new Date().toISOString() };
     if (!Object.keys(state.days[date]).length) delete state.days[date];
-    commit();
+
+    state.updatedAt = new Date().toISOString();
+    Storage.writeLocal(state);
+    render();
+    clearTimeout(saveTimer); // эта отметка уже уходит немедленно — отложенному commit() досылать нечего
+    saveStatusImmediately(date, p.id, prevRec);
+  }
+
+  function showSaveStatus(kind, text) {
+    var el = $('#save-status');
+    if (!el) return;
+    clearTimeout(showSaveStatus._hideTimer);
+    el.className = 'save-status ' + kind;
+    el.innerHTML = '<span class="dot"></span>' + esc(text);
+    el.hidden = false;
+    if (kind === 'ok') {
+      showSaveStatus._hideTimer = setTimeout(function () { el.hidden = true; }, 2000);
+    }
+  }
+
+  function saveStatusImmediately(date, participantId, prevRec) {
+    showSaveStatus('pending', 'Записываю…');
+    setSyncDot('pending');
+    Storage.pull().then(function (remote) {
+      if (remote) {
+        state = normalize(Storage.merge(state, remote));
+        Storage.writeLocal(state);
+      }
+      return Storage.push(state);
+    }).then(function (r) {
+      if (r && r.synced) {
+        PCLog.info('Отметка записана');
+        showSaveStatus('ok', 'Записано ✓');
+        setSyncDot('ok');
+        render();
+      } else {
+        showSaveStatus('err', 'Облако не настроено — сохранено только на этом телефоне');
+        setSyncDot('local');
+      }
+    }).catch(function (e) {
+      // Настоящий откат — возвращаем именно эту ячейку (дата+участник) к тому,
+      // что было до тапа, а не весь state целиком (остальные правки, если
+      // они были, отката не касаются — тот же принцип, что и в Storage.merge).
+      if (prevRec) {
+        if (!state.days[date]) state.days[date] = {};
+        state.days[date][participantId] = prevRec;
+      } else if (state.days[date]) {
+        delete state.days[date][participantId];
+        if (!Object.keys(state.days[date]).length) delete state.days[date];
+      }
+      Storage.writeLocal(state);
+      render();
+      PCLog.error('Не удалось записать отметку: ' + e.message);
+      showSaveStatus('err', 'Ошибка записи: ' + e.message);
+      setSyncDot('err');
+    });
   }
 
   /* Сколько альтернатив израсходовано на неделе этой даты. */
@@ -556,6 +620,17 @@
      (десятки КБ, отдельная загрузка в S3 не нужна). Best-effort: если
      на каком-то устройстве не получится (редко, но бывает) — просто
      останется без миниатюры, значок «▶» как раньше. */
+  /* Баг с чёрными миниатюрами именно у роликов, снятых прямо в
+     приложении (MediaRecorder → WebM), и никогда — у роликов из
+     галереи (обычно уже готовый MP4): свежесозданный blob от
+     MediaRecorder часто физически не декодирует кадр в момент
+     currentTime===0, пока браузер не сделает настоящий seek — рисуется
+     пустой/чёрный кадр без единой ошибки, canvas.toDataURL успешно
+     возвращает валидную, но пустую картинку. У видео из галереи файл
+     уже был декодирован плеером раньше (или его контейнер отдаёт
+     первый кадр сразу) — оттого разница видна только у "своих" видео.
+     Лечится явным seek на небольшое смещение от нуля и захватом кадра
+     уже после события 'seeked', а не сразу по 'loadeddata'. */
   function grabThumbnail(videoEl) {
     var done = false;
     function capture() {
@@ -569,9 +644,16 @@
         done = true;
       } catch (e) { PCLog.warn('Миниатюра не собралась: ' + e.message); }
     }
-    if (videoEl.readyState >= 2) capture();
-    else videoEl.addEventListener('loadeddata', capture, { once: true });
-    setTimeout(capture, 700); // запасной путь, если loadeddata почему-то не пришло
+    function seekThenCapture() {
+      var seekTo = Math.min(0.15, (videoEl.duration || 0.3) / 2);
+      if (!isFinite(seekTo) || seekTo <= 0) { capture(); return; }
+      videoEl.addEventListener('seeked', capture, { once: true });
+      videoEl.currentTime = seekTo;
+      setTimeout(capture, 500); // на случай, если 'seeked' почему-то не придёт
+    }
+    if (videoEl.readyState >= 1) seekThenCapture(); // >=1 — уже знаем duration, можно сикать
+    else videoEl.addEventListener('loadedmetadata', seekThenCapture, { once: true });
+    setTimeout(capture, 1200); // общий запасной путь, если и seek не помог
   }
 
   function openGalleryPicker() {
@@ -880,6 +962,7 @@
     Storage.identity.write(id);
     Storage.identity.markEverSet();
     PCLog.info('Идентичность закреплена: ' + id + (wasEverSet ? ' (повторный выбор после сброса)' : ' (первый выбор)'));
+    startGlobalChatSync(); // при первом выборе идентичности на boot() его ещё не было
 
     $('#whoOverlay').classList.remove('on');
     renderWhoBtn();
@@ -1428,6 +1511,24 @@
     }).catch(function (e) { PCLog.warn('Чат: не удалось обновить — ' + e.message); });
   }
 
+  var globalChatSyncStarted = false;
+
+  /* Опрос + реальное время чата — работают всё время, пока выбрана
+     идентичность, не только когда открыта вкладка "Чат" (по прямому
+     запросу: обновления и бейдж непрочитанных должны приходить, пока
+     сидишь где угодно в приложении). Вызывается один раз из boot()
+     (если идентичность уже была выбрана раньше) или из
+     commitIdentity() (если выбрали только что) — сама идемпотентна,
+     повторный вызов ничего не пересоздаёт (startChatPolling делает
+     stopChatPolling() перед стартом, connectRealtime выходит сразу,
+     если соединение уже есть). */
+  function startGlobalChatSync() {
+    if (globalChatSyncStarted) return;
+    globalChatSyncStarted = true;
+    startChatPolling();
+    connectRealtime();
+  }
+
   function startChatPolling() {
     stopChatPolling();
     chatPollCount = 0;
@@ -1879,11 +1980,12 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v46', items: [
-      'Отметки в журнале, счёт и правила тоже переехали с Диска на виртуалку — весь челлендж теперь на своей базе',
-      'Чат оформлен по образцу Telegram: тап по сообщению открывает меню (ответить/копировать/выбрать/удалить) с быстрыми реакциями сверху, зажатие включает выбор нескольких сразу',
-      'Скрепка — можно прислать фото, видео или файл прямо в чат',
-      'Упоминания @Имя с автодополнением и подсветкой, большая панель эмодзи в поле ввода'
+    { v: 'v47', items: [
+      'Критично: отметки норм иногда вообще не сохранялись в облако (внутренняя ошибка Storage.push) — починено',
+      'Отметка нормы теперь пишется в SQL сразу, с явным статусом «Записываю…/Записано/Ошибка записи» и настоящим откатом, если запись не удалась',
+      'Push-уведомления тоже переехали на виртуалку — раньше подписки иногда терялись при почти одновременной отправке с разных телефонов',
+      'Нижняя панель вкладок убрана — Чат/Журнал/Настройки теперь наверху, внизу под чатом свободно',
+      'Миниатюры своих же видео (снятых прямо в приложении) больше не бывают чёрными'
     ] }
   ];
 
@@ -1971,19 +2073,29 @@
       b.classList.toggle('on', b.dataset.view === view);
     });
     window.scrollTo(0, 0);
+
+    /* Верхняя навигация вместо нижних вкладок: на "Сегодня" — группа
+       кнопок (Журнал/Чат/Настройки), везде ещё — одна "← Назад" на
+       тот же "Сегодня". Один и тот же элемент во всех "не домашних"
+       экранах, как и просили. */
+    var isHome = view === 'today';
+    $('#topnav-home-actions').hidden = !isHome;
+    $('#topnav-back').hidden = isHome;
+
     if (view === 'chat') {
       prepareUnreadSnapshot();
       markChatRead();
       renderChat();
-      startChatPolling();
-      connectRealtime();
       scrollChatToBottom();
       repositionChatBars();
     } else {
-      stopChatPolling();
-      disconnectRealtime();
       unreadSnapshot = null; // при следующем открытии посчитается заново
     }
+    /* Опрос чата и реальное время теперь НЕ привязаны к тому, открыта
+       ли именно вкладка "Чат" — работают всё время, пока выбрана
+       идентичность, чтобы бейдж непрочитанных обновлялся, даже когда
+       сидишь на "Сегодня" или в Настройках (см. также запуск в boot()
+       и commitIdentity()). show() их больше не запускает/останавливает. */
   }
 
   /* Отдельная функция, а не часть renderChat(): нужно гарантированно
@@ -2011,7 +2123,7 @@
      window.visualViewport (см. пояснение в styles.css у .chat-input).
      Без visualViewport (старые браузеры) — просто ничего не делаем,
      остаётся дефолтный CSS-отступ под нижнюю панель. */
-  var NAV_CLEARANCE_PX = 70; // должно совпадать с базовым bottom в CSS у .chat-input
+  var NAV_CLEARANCE_PX = 0; // должно совпадать с базовым bottom в CSS у .chat-input (var(--safe-b), без нижней панели вкладок)
 
   function repositionChatBars() {
     var composer = document.querySelector('.chat-input');
@@ -2152,13 +2264,13 @@
           PCLog.warn('Уведомления не разрешены: ' + perm);
           return;
         }
-        if (!Storage.push.supported()) {
+        if (!Storage.webpush.supported()) {
           st.textContent = 'Разрешение получено, но push не поддерживается — на iPhone работает только для версии, добавленной на «Экран Домой»';
           st.className = 'status-line err';
           return;
         }
         st.textContent = 'Оформляю подписку…';
-        Storage.push.subscribe(myId()).then(function () {
+        Storage.webpush.subscribe(myId()).then(function () {
           st.textContent = 'Включено — теперь прилетит, даже если приложение полностью закрыто';
           st.className = 'status-line ok';
           PCLog.info('Push-подписка оформлена для ' + myId());
@@ -2407,6 +2519,7 @@
     setInterval(tick, 1000);
 
     if (!myId()) openIdentityGate();
+    else startGlobalChatSync();
 
     /* если день сменился, пока приложение висело в фоне; и досылаем
        несохранённые изменения, если страница как раз в этот момент

@@ -21,7 +21,7 @@ body{
   color:var(--ink);
   font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   font-size:16px;line-height:1.5;
-  padding-bottom:calc(78px + var(--safe-b));
+  padding-bottom:calc(16px + var(--safe-b));
   overscroll-behavior-y:none;
 }
 button{font:inherit;color:inherit;cursor:pointer;}
@@ -150,17 +150,23 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 .status-line.err{color:var(--signal);}
 .status-line.ok{color:var(--ok);}
 
-/* ---------- нижняя навигация ---------- */
-.tabs{
-  position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--card);
-  border-top:1px solid var(--rule);display:grid;grid-template-columns:repeat(4,1fr);
-  padding-bottom:var(--safe-b);
-}
-.tabs button{background:transparent;border:0;padding:11px 2px 10px;display:flex;flex-direction:column;
-  align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.02em;}
-.tabs button .g{font-size:18px;line-height:1;}
-.tabs button.on{color:var(--ink);}
-.tabs button.on .g{transform:translateY(-1px);}
+/* ---------- верхняя навигация (заменила нижнюю панель вкладок) ----------
+   Одна страница, снизу совершенно пусто — по прямому запросу. Дом —
+   «Сегодня», без явной кнопки (сама шапка/лого = "домой"). На "Сегодня"
+   видна группа [Журнал | Чат (+бейдж) | Настройки], на всех остальных
+   экранах — ровно одна кнопка "← Назад", тот же элемент везде. */
+.topnav{background:var(--ink);display:flex;align-items:center;gap:8px;padding:0 16px 10px;}
+.topnav-back{background:transparent;border:0;color:#fff;font-family:"JetBrains Mono",monospace;
+  font-size:12.5px;font-weight:700;letter-spacing:.04em;padding:6px 4px;}
+.topnav-home-actions{display:flex;align-items:center;gap:8px;width:100%;}
+.topnav-journal{background:#1E2A36;border:1px solid #33485C;color:#9FB0BE;padding:6px 12px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.02em;
+  border-radius:11px;display:flex;align-items:center;gap:5px;}
+.topnav-chat{flex:1;position:relative;background:var(--signal);border:0;color:#fff;padding:8px 14px;
+  font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;letter-spacing:.03em;
+  border-radius:11px;display:flex;align-items:center;justify-content:center;gap:6px;}
+.topnav-settings{background:#1E2A36;border:1px solid #33485C;color:#9FB0BE;width:32px;height:32px;
+  border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;}
 
 /* ---------- мини-кнопки сверху на «Сегодня» ---------- */
 .quicklinks{display:flex;gap:8px;margin-bottom:16px;}
@@ -173,6 +179,15 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 @keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
 #ql-money-sum.zero{color:var(--ok);}
 #ql-money-sum.owe{color:var(--signal);}
+
+/* ---------- статус мгновенной записи отметки в SQL ---------- */
+.save-status{display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:14px;
+  font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:600;border:1px solid var(--rule);}
+.save-status.pending{background:#FFF6E0;border-color:#E0A93A;color:#8A6212;}
+.save-status.ok{background:#E7F3ED;border-color:var(--ok);color:var(--ok);}
+.save-status.err{background:#FBEAE9;border-color:var(--signal);color:var(--signal);}
+.save-status .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:currentColor;}
+.save-status.pending .dot{animation:pulse 1s ease-in-out infinite;}
 
 .datebar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;}
 .datebar .d{font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:600;}
@@ -299,9 +314,13 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   --chat-bg:#121316; --chat-surface:#1b1d22; --chat-surface2:#22252b; --chat-border:#2c2f36;
   --chat-primary:#8774E1; --chat-mine:#6C5DD3; --chat-text:#e8eaed; --chat-muted:#9aa0a8;
 }
-.view.on#v-chat{display:flex;flex-direction:column;min-height:calc(100vh - 260px);
-  background:var(--chat-bg);margin:0 -12px;padding:10px 12px calc(78px + var(--safe-b));color:var(--chat-text);}
-.chat-log{flex:1;display:flex;flex-direction:column;padding-bottom:140px;}
+.view.on#v-chat{display:flex;flex-direction:column;min-height:calc(100vh - 230px);
+  background:var(--chat-bg);margin:0 -12px;padding:10px 12px calc(64px + var(--safe-b));color:var(--chat-text);}
+/* justify-content:flex-end — когда сообщений мало и они не заполняют
+   всю высоту вкладки (flex:1 у самого контейнера), последний пузырь
+   должен стоять прямо над полем ввода, а не прилипать к верху с
+   пустотой под собой до самого композера. */
+.chat-log{flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding-bottom:70px;}
 
 .chat-day{align-self:center;font-size:11.5px;font-weight:600;color:var(--chat-muted);
   background:rgba(127,127,127,.22);padding:4px 12px;margin:10px 0 6px;border-radius:12px;}
@@ -406,21 +425,33 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
    window.visualViewport (см. initChatKeyboardOffset() в app.js) —
    единственный по-настоящему надёжный способ на iOS. */
 .chat-input{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;bottom:calc(70px + var(--safe-b));z-index:55;display:flex;gap:8px;
+  box-sizing:border-box;bottom:var(--safe-b);z-index:55;display:flex;align-items:center;gap:8px;
   background:var(--chat-bg);padding:8px 12px 10px;}
-.chat-input input{flex:1;padding:11px 13px;border:1px solid var(--chat-border);
-  background:var(--chat-surface2);color:var(--chat-text);border-radius:20px;
-  font-size:16px;font-family:"IBM Plex Sans",sans-serif;}
-.chat-input button{width:42px;height:42px;flex-shrink:0;padding:0;font-size:16px;
+
+/* Скрепка + поле + эмодзи — один общий "пузырь", как в референсе
+   Telegram Web, а не три отдельных элемента с полем посередине. Кнопка
+   отправки намеренно снаружи, отдельным цветным кругом — так же, как
+   и там. */
+.chat-input-pill{flex:1;min-width:0;display:flex;align-items:center;gap:2px;
+  border:1px solid var(--chat-border);background:var(--chat-surface2);border-radius:22px;
+  padding:0 4px 0 6px;}
+.chat-input-pill input{flex:1;min-width:0;padding:11px 4px;border:0;background:transparent;
+  color:var(--chat-text);font-size:16px;font-family:"IBM Plex Sans",sans-serif;}
+/* > — только кнопка отправки, прямой потомок формы; скрепка/эмодзи
+   вложены в .chat-input-pill и это правило их не должно задевать (без
+   ">" общий селектор по специфичности перебивал .chat-icon-btn ниже). */
+.chat-input > button{width:42px;height:42px;flex-shrink:0;padding:0;font-size:16px;
   border-radius:50%;background:var(--chat-primary);color:#fff;}
-.chat-attach-btn{width:38px;height:42px;flex-shrink:0;padding:0;font-size:19px;
-  background:transparent;color:var(--chat-muted);border-radius:0;}
-.chat-emoji-btn{width:34px;height:42px;flex-shrink:0;padding:0;font-size:19px;
-  background:transparent;color:var(--chat-muted);border-radius:0;}
+/* Скрепка/эмодзи — тонкие монохромные иконки (SVG, currentColor), не
+   цветные emoji-глифы: тон = var(--chat-muted), как приглушённые
+   контурные иконки в Telegram, не сплошная заливка. */
+.chat-icon-btn{width:32px;height:38px;flex-shrink:0;padding:0;background:transparent;
+  color:var(--chat-muted);border-radius:50%;display:flex;align-items:center;justify-content:center;}
+.chat-icon-btn:active{background:rgba(255,255,255,.08);}
 
 /* ---------- панель эмодзи над полем ввода ---------- */
 .emoji-picker{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;bottom:calc(122px + var(--safe-b));z-index:56;background:var(--chat-surface);
+  box-sizing:border-box;bottom:calc(60px + var(--safe-b));z-index:56;background:var(--chat-surface);
   border:1px solid var(--chat-border);border-radius:12px;padding:8px;
   box-shadow:0 -4px 20px rgba(0,0,0,.35);max-height:240px;overflow-y:auto;
   display:grid;grid-template-columns:repeat(8,1fr);gap:2px;}
@@ -430,7 +461,7 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 
 /* ---------- панель множественного выбора (заменяет композер) ---------- */
 .select-bar{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;bottom:calc(70px + var(--safe-b));z-index:55;display:flex;align-items:center;
+  box-sizing:border-box;bottom:var(--safe-b);z-index:55;display:flex;align-items:center;
   gap:10px;background:var(--chat-bg);padding:8px 14px 10px;color:var(--chat-text);}
 .select-bar button{background:transparent;border:0;color:var(--chat-text);font-size:18px;padding:4px 6px;}
 .select-bar button:disabled{opacity:.35;}
@@ -444,7 +475,7 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 
 /* ---------- автодополнение @упоминаний над полем ввода ---------- */
 .mention-menu{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;bottom:calc(122px + var(--safe-b));z-index:56;background:var(--chat-surface);
+  box-sizing:border-box;bottom:calc(60px + var(--safe-b));z-index:56;background:var(--chat-surface);
   border:1px solid var(--chat-border);border-radius:12px;padding:6px;
   box-shadow:0 -4px 20px rgba(0,0,0,.35);max-height:200px;overflow-y:auto;}
 .mention-menu button{display:flex;align-items:center;gap:10px;width:100%;background:transparent;
@@ -454,7 +485,7 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   justify-content:center;color:#fff;font-weight:700;font-size:11px;flex-shrink:0;}
 
 /* ---------- скрепка: маленькое меню "Фото или видео / Файл" ---------- */
-.attach-menu{position:fixed;left:16px;bottom:calc(122px + var(--safe-b));z-index:56;
+.attach-menu{position:fixed;left:16px;bottom:calc(60px + var(--safe-b));z-index:56;
   background:var(--chat-surface);border:1px solid var(--chat-border);border-radius:12px;
   padding:6px;display:flex;flex-direction:column;box-shadow:0 8px 24px rgba(0,0,0,.4);min-width:190px;}
 .attach-menu button{display:flex;align-items:center;gap:10px;background:transparent;border:0;

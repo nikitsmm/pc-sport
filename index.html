@@ -19,11 +19,22 @@
 <body>
 
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v46 · 21.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v47 · 22.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
 </header>
+
+<!-- Верхняя навигация — заменила нижнюю панель вкладок. На "Сегодня"
+     видна группа кнопок, на всех остальных экранах — одна "← Назад". -->
+<div class="topnav" id="topnav">
+  <button class="topnav-back" id="topnav-back" data-view="today" hidden>← Назад</button>
+  <div class="topnav-home-actions" id="topnav-home-actions">
+    <button class="topnav-journal" data-view="log"><span class="g">▤</span>Журнал</button>
+    <button class="topnav-chat" data-view="chat">💬 Чат<span class="chat-dot" id="chat-dot" hidden></span></button>
+    <button class="topnav-settings" data-view="cfg" title="Настройки" aria-label="Настройки">⚙</button>
+  </div>
+</div>
 
 <div class="rec-overlay" id="whoOverlay">
   <div class="rec-box">
@@ -44,6 +55,7 @@
       <button data-view="rules"><span class="g">§</span>Правила</button>
       <button id="ql-refresh"><span class="g">↻</span><span id="ql-refresh-label">Обновить</span></button>
     </div>
+    <div class="save-status" id="save-status" hidden></div>
     <div class="datebar">
       <button id="d-prev" aria-label="Предыдущий день">‹</button>
       <div class="d" id="d-label">—</div>
@@ -99,9 +111,15 @@
       <input type="file" id="attach-input-file" hidden>
       <div class="emoji-picker" id="emoji-picker" hidden></div>
       <form class="chat-input" id="chat-form">
-        <button class="chat-attach-btn" id="chat-attach-btn" type="button" title="Прикрепить">📎</button>
-        <input id="chat-text" type="text" placeholder="Сообщение…" autocomplete="off" maxlength="2000">
-        <button class="chat-emoji-btn" id="chat-emoji-btn" type="button" title="Эмодзи">😊</button>
+        <div class="chat-input-pill">
+          <button class="chat-icon-btn" id="chat-attach-btn" type="button" title="Прикрепить">
+            <svg viewBox="0 0 24 24" width="21" height="21"><path d="M17.5 7.5v8a4 4 0 1 1-8 0V6a2.5 2.5 0 0 1 5 0v8a1 1 0 1 1-2 0V7.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <input id="chat-text" type="text" placeholder="Сообщение…" autocomplete="off" maxlength="2000">
+          <button class="chat-icon-btn" id="chat-emoji-btn" type="button" title="Эмодзи">
+            <svg viewBox="0 0 24 24" width="21" height="21"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="9" cy="10" r="1.1" fill="currentColor"/><circle cx="15" cy="10" r="1.1" fill="currentColor"/><path d="M8.3 14.2c1 1.3 2.3 2 3.7 2s2.7-.7 3.7-2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </button>
+        </div>
         <button class="btn" id="chat-send" type="submit">➤</button>
       </form>
     </div>
@@ -252,12 +270,6 @@
 
 </main>
 
-<nav class="tabs" id="tabs">
-  <button data-view="today" class="on"><span class="g">▣</span>Сегодня</button>
-  <button data-view="log"><span class="g">▤</span>Журнал</button>
-  <button data-view="chat" style="position:relative"><span class="g">💬</span>Чат<span class="chat-dot" id="chat-dot" hidden></span></button>
-  <button data-view="cfg"><span class="g">⚙</span>Настройки</button>
-</nav>
 
 <div class="rec-overlay" id="recOverlay">
   <div class="rec-box">
