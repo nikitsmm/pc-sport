@@ -183,11 +183,31 @@
   function flushSave() {
     clearTimeout(saveTimer);
     PCLog.info('Сохраняю изменения на Диск…');
-    Storage.push(state).then(function (r) {
+    /* Раньше здесь было просто Storage.push(state) — отправка локальной
+       копии как есть. Дыра в этом: push ничего не сливает на сервере,
+       он просто ПЕРЕЗАПИСЫВАЕТ state.json целиком тем, что прислали
+       (см. action_save_state в backend/index.py). Если на сервере уже
+       успела появиться чужая более свежая отметка, которую этот телефон
+       ещё не подтянул — такая отправка её стирает, причём совершенно
+       незаметно для того, кто её отправил (у него на экране всё в
+       порядке, это его СОБСТВЕННая копия). Раньше эту проблему чинили
+       только на приёме (Storage.merge при pull) — но не на отправке.
+       Теперь перед каждой отправкой сначала подтягиваем актуальное с
+       сервера и сливаем по записям (дата+участник, см. Storage.merge),
+       и отправляем уже объединённый результат — не голую локальную
+       копию. */
+    Storage.pull().then(function (remote) {
+      if (remote) {
+        state = normalize(Storage.merge(state, remote));
+        Storage.writeLocal(state);
+      }
+      return Storage.push(state);
+    }).then(function (r) {
       if (r && r.synced) {
         PCLog.info('Сохранено на Диск');
         setCfgStatus('Выгружено на Яндекс.Диск', 'ok');
         setSyncDot('ok');
+        render();
       } else {
         setSyncDot('local');
       }
@@ -1164,6 +1184,7 @@
     bar.hidden = false;
     bar.innerHTML = '<div class="reply-bar-txt"><b>' + esc(name) + '</b><br>' + esc(preview) + '</div><button id="chat-reply-cancel">✕</button>';
     $('#chat-reply-cancel').addEventListener('click', clearReply);
+    repositionChatBars();
   }
 
   /* Автосообщения о видео — от лица того, кто грузит, не от «бота»:
@@ -1273,9 +1294,44 @@
     });
   }
 
+  /* Коротко, по 2-4 пункта на версию, только заметное человеку —
+     полная история со всеми техническими деталями в README.md проекта.
+     Обновлять при каждом бампе версии в шапке. */
+  var CHANGELOG = [
+    { v: 'v42', items: [
+      'Критично: отметки нормы иногда пропадали при почти одновременной отправке с разных телефонов — починено',
+      'То же самое чинит и кнопка «Обновить»'
+    ] },
+    { v: 'v41', items: [
+      'Чат: поле ввода сообщения больше не убегает при открытии клавиатуры',
+      'Настройки: компактнее — карточки участников и выбор идентичности занимают меньше места',
+      'Кнопка «Обновить» теперь честно показывает результат и не крутится дольше 15 секунд',
+      'Уведомления перенесены в самый верх настроек'
+    ] },
+    { v: 'v40', items: [
+      'Починены дубли сообщений в чате (уходили по 3-4 раза при сбое сети)',
+      'У своих сообщений в чате убран лишний аватар',
+      'Тёмный фон вкладки чата теперь доходит до самого низа экрана'
+    ] },
+    { v: 'v39', items: [
+      'Оформление чата переделано в стиле Telegram — пузыри, группировка, реакции, ответы'
+    ] }
+  ];
+
+  function renderChangelog() {
+    var host = $('#cfg-changelog');
+    if (!host) return;
+    host.innerHTML = CHANGELOG.map(function (v) {
+      return '<div class="cl-version"><b>' + v.v + '</b><ul>' +
+        v.items.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') +
+        '</ul></div>';
+    }).join('');
+  }
+
   function renderCfg() {
     renderLogBox();
     renderCfgWho();
+    renderChangelog();
     var cfg = Storage.config.read();
     $('#cfg-backend').value = cfg.backend;
     $('#cfg-url').value = cfg.url || '';
@@ -1285,14 +1341,14 @@
 
     $('#cfg-people').innerHTML = state.participants.map(function (p) {
       var fields = p.mode === 'alt'
-        ? '<div class="row"><div style="flex:1"><label>Подтягивания</label><input type="number" min="1" data-f="pullups" data-p="' + p.id + '" value="' + p.pullups + '"></div>' +
-          '<div style="flex:1"><label>Отжимания</label><input type="number" min="1" data-f="pushups" data-p="' + p.id + '" value="' + p.pushups + '"></div></div>'
-        : '<label>Отжимания каждый день</label><input type="number" min="1" data-f="reps" data-p="' + p.id + '" value="' + p.reps + '">';
-      return '<div style="padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--rule)">' +
-             '<div class="who" style="font-family:Unbounded,sans-serif;font-weight:600;text-transform:uppercase;font-size:14px">' + p.name + '</div>' +
-             fields +
-             '<label>Вышел из челленджа</label><input type="date" data-f="leftAt" data-p="' + p.id + '" value="' + (p.leftAt || '') + '">' +
-             '</div>';
+        ? '<div class="ppl-field"><span>Подтяг.</span><input type="number" min="1" data-f="pullups" data-p="' + p.id + '" value="' + p.pullups + '"></div>' +
+          '<div class="ppl-field"><span>Отжим.</span><input type="number" min="1" data-f="pushups" data-p="' + p.id + '" value="' + p.pushups + '"></div>'
+        : '<div class="ppl-field"><span>Отжим./день</span><input type="number" min="1" data-f="reps" data-p="' + p.id + '" value="' + p.reps + '"></div>';
+      return '<div class="ppl-card">' +
+             '<div class="ppl-name">' + p.name + '</div>' +
+             '<div class="ppl-row">' + fields +
+               '<div class="ppl-field"><span>Вышел</span><input type="date" data-f="leftAt" data-p="' + p.id + '" value="' + (p.leftAt || '') + '"></div>' +
+             '</div></div>';
     }).join('');
 
     $('#cfg-people').querySelectorAll('input[data-p]').forEach(function (inp) {
@@ -1352,6 +1408,7 @@
       renderChat();
       startChatPolling();
       scrollChatToBottom();
+      repositionChatBars();
     } else {
       stopChatPolling();
       unreadSnapshot = null; // при следующем открытии посчитается заново
@@ -1375,6 +1432,40 @@
         window.scrollTo(0, document.body.scrollHeight);
       });
     });
+  }
+
+  /* Держит композер (и панель ответа над ним) прижатыми к клавиатуре
+     на iOS — position:fixed сам по себе этого не гарантирует, когда
+     клавиатура открыта, нужно вручную пересчитывать отступ снизу по
+     window.visualViewport (см. пояснение в styles.css у .chat-input).
+     Без visualViewport (старые браузеры) — просто ничего не делаем,
+     остаётся дефолтный CSS-отступ под нижнюю панель. */
+  var NAV_CLEARANCE_PX = 70; // должно совпадать с базовым bottom в CSS у .chat-input
+
+  function repositionChatBars() {
+    var composer = document.querySelector('.chat-input');
+    if (!composer) return;
+    var replyBar = document.getElementById('chat-reply-bar');
+    var kb = 0;
+    if (window.visualViewport) {
+      kb = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
+    }
+    var safeB = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-b')) || 0;
+    var bottom = kb > 40 ? (kb + 4) : (NAV_CLEARANCE_PX + safeB);
+    composer.style.bottom = bottom + 'px';
+    if (replyBar && !replyBar.hidden) {
+      replyBar.style.bottom = (bottom + composer.getBoundingClientRect().height) + 'px';
+    }
+    if (kb > 40 && document.getElementById('v-chat').classList.contains('on')) {
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  }
+
+  function initChatKeyboardOffset() {
+    if (!window.visualViewport) return;
+    window.visualViewport.addEventListener('resize', repositionChatBars);
+    window.visualViewport.addEventListener('scroll', repositionChatBars);
+    repositionChatBars();
   }
 
   function bind() {
@@ -1532,31 +1623,52 @@
 
     $('#ql-refresh').addEventListener('click', function () {
       var btn = $('#ql-refresh');
+      var label = $('#ql-refresh-label');
       if (btn.disabled) return;
       btn.disabled = true;
       btn.classList.add('spinning');
+      label.textContent = 'Обновляю…';
       setSyncDot('pending');
       PCLog.info('Обновление вручную: выгружаю, затем подтягиваю свежее');
 
-      state.updatedAt = new Date().toISOString();
-      Storage.push(state).then(function () {
-        return Storage.pull();
-      }).then(function (remote) {
-        if (remote) {
-          state = normalize(Storage.merge(state, remote));
-          Storage.writeLocal(state);
-          render();
-        }
+      /* fetch() сам по себе никогда не отваливается по таймауту — если
+         сеть просто зависнет, кнопка крутилась бы бесконечно, и вообще
+         непонятно, сработало или нет. Явный потолок в 15 секунд решает
+         оба: и не виснет вечно, и результат всегда виден у самой кнопки,
+         а не в невидимом на этой вкладке статусе настроек. */
+      var timeout = new Promise(function (_, reject) {
+        setTimeout(function () { reject(new Error('Не отвечает больше 15 секунд')); }, 15000);
+      });
+
+      /* Порядок важен: раньше тут сначала отправлялось локальное (push),
+         потом подтягивалось свежее (pull) — а push ничего не сливает на
+         сервере, он перезаписывает state.json целиком. Если на сервере
+         уже было что-то новее локальной копии — оно стиралось этим же
+         нажатием "Обновить", ровно наоборот тому, что кнопка обещает.
+         Теперь сначала pull+слияние по записям, потом push уже
+         объединённого результата. */
+      Promise.race([
+        Storage.pull().then(function (remote) {
+          if (remote) state = normalize(Storage.merge(state, remote));
+          return Storage.push(state);
+        }),
+        timeout
+      ]).then(function () {
+        Storage.writeLocal(state);
+        render();
         setSyncDot('ok');
-        setCfgStatus('Обновлено', 'ok');
+        label.textContent = 'Обновлено ✓';
         PCLog.info('Обновление вручную: успешно');
       }).catch(function (e) {
         setSyncDot('err');
-        setCfgStatus(e.message, 'err');
+        label.textContent = 'Не вышло: ' + e.message;
         PCLog.error('Обновление вручную не удалось: ' + e.message);
       }).finally(function () {
         btn.disabled = false;
         btn.classList.remove('spinning');
+        setTimeout(function () {
+          if (label.textContent.indexOf('Обновляю') === -1) label.textContent = 'Обновить';
+        }, 3000);
       });
     });
 
@@ -1642,6 +1754,7 @@
     cursor = today();
     bind();
     render();
+    initChatKeyboardOffset();
     tick();
     setInterval(tick, 1000);
 

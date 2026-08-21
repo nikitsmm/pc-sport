@@ -256,7 +256,34 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 .who-grid button{background:var(--card);border:1px solid var(--rule);padding:12px 10px;
   font-family:"Unbounded",sans-serif;font-weight:600;font-size:14px;text-transform:uppercase;color:var(--ink);}
 .who-grid button.on{background:var(--ink);border-color:var(--ink);color:#fff;}
-.who-locked-name{font-family:"Unbounded",sans-serif;font-weight:600;font-size:20px;text-transform:uppercase;color:var(--ink);}
+/* Компактный вариант — только для настроек (#cfg-who-pick), где эта
+   сетка появляется лишь в редком краевом случае (идентичность почему-то
+   не выбрана), в остальное время там просто закреплённое имя+кнопка
+   сброса. В обязательном гейте при первом запуске и в чате оставлен
+   обычный размер — там это единственное и главное действие на экране,
+   должно быть удобно тапать. */
+.who-grid.compact{gap:6px;}
+.who-grid.compact button{padding:8px 6px;font-size:12px;}
+.who-locked-name{font-family:"Unbounded",sans-serif;font-weight:600;font-size:15px;text-transform:uppercase;color:var(--ink);}
+
+/* ---------- компактные карточки участников в настройках ---------- */
+.ppl-card{padding:10px 0;border-bottom:1px solid var(--rule);}
+.ppl-card:last-child{border-bottom:0;}
+.ppl-name{font-family:"Unbounded",sans-serif;font-weight:600;font-size:12px;text-transform:uppercase;
+  margin-bottom:6px;color:var(--muted);}
+.ppl-row{display:flex;gap:6px;}
+.ppl-field{flex:1;min-width:0;}
+.ppl-field span{display:block;font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:3px;}
+.ppl-field input{width:100%;padding:6px 7px;border:1px solid var(--rule);background:#F7F9FA;
+  font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--ink);}
+
+/* ---------- что нового ---------- */
+.cl-version{padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid var(--rule);}
+.cl-version:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0;}
+.cl-version b{font-family:"JetBrains Mono",monospace;font-size:12px;letter-spacing:.04em;color:var(--steel);}
+.cl-version ul{margin:6px 0 0;padding-left:18px;}
+.cl-version li{font-size:13px;line-height:1.5;margin-bottom:3px;}
 
 /* ============================================================
    Чат — оформление один в один с Herald Chat (по прямому запросу):
@@ -274,7 +301,7 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 }
 .view.on#v-chat{display:flex;flex-direction:column;min-height:calc(100vh - 260px);
   background:var(--chat-bg);margin:0 -12px;padding:10px 12px calc(78px + var(--safe-b));color:var(--chat-text);}
-.chat-log{flex:1;display:flex;flex-direction:column;padding-bottom:8px;}
+.chat-log{flex:1;display:flex;flex-direction:column;padding-bottom:140px;}
 
 .chat-day{align-self:center;font-size:11.5px;font-weight:600;color:var(--chat-muted);
   background:rgba(127,127,127,.22);padding:4px 12px;margin:10px 0 6px;border-radius:12px;}
@@ -346,15 +373,24 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   text-transform:uppercase;letter-spacing:.04em;}
 
 /* ---------- панель ответа над полем ввода ---------- */
-.reply-bar{display:flex;align-items:center;gap:8px;background:var(--chat-surface2);
-  border:1px solid var(--chat-border);border-bottom:0;padding:7px 10px;font-size:12.5px;
+.reply-bar{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
+  box-sizing:border-box;z-index:56;display:flex;align-items:center;gap:8px;background:var(--chat-surface2);
+  border:1px solid var(--chat-border);border-bottom:0;padding:7px 12px;font-size:12.5px;
   color:var(--chat-text);border-radius:10px 10px 0 0;}
 .reply-bar-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .reply-bar-txt b{display:block;font-size:11px;font-weight:600;color:var(--chat-primary);}
 .reply-bar button{background:transparent;border:0;color:var(--chat-muted);font-size:15px;padding:2px 4px;}
 
-.chat-input{position:sticky;bottom:calc(70px + var(--safe-b));display:flex;gap:8px;
-  background:var(--chat-bg);padding:8px 0 10px;}
+/* position:fixed вместо sticky — намеренно. Sticky на iOS Safari
+   считает позицию по "раскладочному" вьюпорту, а открытие клавиатуры
+   меняет "визуальный" — раскладочный при этом не всегда пересчитывается
+   синхронно, и sticky-элемент визуально "убегает" в случайное место,
+   пока это рассинхронизировано. Fixed + ручной пересчёт bottom через
+   window.visualViewport (см. initChatKeyboardOffset() в app.js) —
+   единственный по-настоящему надёжный способ на iOS. */
+.chat-input{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
+  box-sizing:border-box;bottom:calc(70px + var(--safe-b));z-index:55;display:flex;gap:8px;
+  background:var(--chat-bg);padding:8px 12px 10px;}
 .chat-input input{flex:1;padding:11px 13px;border:1px solid var(--chat-border);
   background:var(--chat-surface2);color:var(--chat-text);border-radius:20px;
   font-size:16px;font-family:"IBM Plex Sans",sans-serif;}
