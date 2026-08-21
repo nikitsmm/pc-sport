@@ -1079,6 +1079,64 @@
     chatPollTimer = null;
   }
 
+  /* ============================================================
+     Centrifugo — реальное время вместо ожидания опроса раз в 8 секунд.
+     Опрос (startChatPolling выше) остаётся включённым ОДНОВРЕМЕННО —
+     это осознанно: на первом заходе безопаснее иметь работающую
+     подстраховку, чем полагаться только на новый механизм. Если
+     Centrifugo недоступен или ещё не настроен на бэкенде (переменные
+     окружения не выставлены) — просто тихо не подключаемся, чат как и
+     раньше работает через опрос, ничего не ломается. */
+  var centrifugeClient = null;
+
+  function connectRealtime() {
+    if (centrifugeClient) return; // уже подключены
+    if (typeof Centrifuge === 'undefined') return; // библиотека не подгрузилась (например, офлайн)
+    var myIdVal = myId();
+    if (!myIdVal) return;
+
+    Storage.chat.getRealtimeToken(myIdVal).then(function (r) {
+      if (!r || !r.token || !r.url || !r.channel) return;
+      var wsUrl = r.url.replace(/^http/, 'ws') + '/connection/websocket';
+      var client = new Centrifuge(wsUrl, { token: r.token });
+
+      client.on('connected', function () { PCLog.info('Centrifugo: подключено, реальное время включено'); });
+      client.on('disconnected', function (ctx) { PCLog.warn('Centrifugo: отключено (' + (ctx && ctx.reason) + ') — держимся на опросе'); });
+      client.on('error', function (ctx) { PCLog.warn('Centrifugo: ошибка соединения — ' + JSON.stringify(ctx)); });
+
+      var sub = client.newSubscription(r.channel);
+      sub.on('publication', function (ctx) {
+        var data = ctx.data;
+        if (!data || !data.message) return;
+        /* chatMerge сама разбирается, новое это сообщение или
+           обновление реакций на уже известном — один и тот же путь
+           для обоих типов событий с бэкенда. */
+        var changed = chatMerge([data.message]);
+        if (!changed) return;
+        var onChatTab = document.getElementById('v-chat').classList.contains('on');
+        if (onChatTab && !document.hidden) {
+          markChatRead();
+          renderChat();
+        } else if (data.message.participantId !== myIdVal) {
+          bumpChatUnread(1);
+          notifyNewMessages([data.message]);
+        }
+      });
+      sub.subscribe();
+      client.connect();
+      centrifugeClient = client;
+    }).catch(function (e) {
+      PCLog.warn('Centrifugo недоступен, работаем через обычный опрос: ' + e.message);
+    });
+  }
+
+  function disconnectRealtime() {
+    if (centrifugeClient) {
+      centrifugeClient.disconnect();
+      centrifugeClient = null;
+    }
+  }
+
   function bumpChatUnread(n) {
     var dot = $('#chat-dot');
     if (!dot) return;
@@ -1298,6 +1356,10 @@
      полная история со всеми техническими деталями в README.md проекта.
      Обновлять при каждом бампе версии в шапке. */
   var CHANGELOG = [
+    { v: 'v43', items: [
+      'Чат: сообщения и реакции теперь долетают мгновенно (своя виртуалка с Centrifugo), не ждут опроса раз в 8 секунд',
+      'Опрос оставлен как подстраховка на фоне — если реальное время недоступно, чат тихо продолжает работать как раньше'
+    ] },
     { v: 'v42', items: [
       'Критично: отметки нормы иногда пропадали при почти одновременной отправке с разных телефонов — починено',
       'То же самое чинит и кнопка «Обновить»'
@@ -1407,10 +1469,12 @@
       markChatRead();
       renderChat();
       startChatPolling();
+      connectRealtime();
       scrollChatToBottom();
       repositionChatBars();
     } else {
       stopChatPolling();
+      disconnectRealtime();
       unreadSnapshot = null; // при следующем открытии посчитается заново
     }
   }

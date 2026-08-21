@@ -599,6 +599,17 @@
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
         var r = await apiRetry(cfg.url, 'react_message', { participantId: participantId, messageId: messageId, emoji: emoji }, 3);
         return r.message;
+      },
+
+      /* Токен на прямое подключение к Centrifugo (реальное время вместо
+         опроса раз в 8 секунд) — сама доставка сообщений идёт мимо этой
+         функции, напрямую с телефона на виртуалку. Если на бэкенде
+         Centrifugo ещё не настроен — вернётся ошибка, вызывающий код
+         должен на это тихо откатиться на обычный опрос. */
+      getRealtimeToken: async function (participantId) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        return api(cfg.url, 'get_realtime_token', { participantId: participantId });
       }
     }
   };
