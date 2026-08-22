@@ -12,6 +12,7 @@
   --alt:#8A6212;
   --fm:#33485C;
   --safe-b:env(safe-area-inset-bottom,0px);
+  --header-h:112px; /* запасное значение до первого измерения в JS, см. syncHeaderHeightVar() в app.js */
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 html{-webkit-text-size-adjust:100%;}
@@ -65,6 +66,12 @@ h2{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:11.5px;fo
 
 /* ---------- карточка участника ---------- */
 .card{background:var(--card);border:1px solid var(--rule);margin-bottom:10px;}
+/* Карточка участника + его видео-блок — визуально одна группа: внешний
+   отступ до следующего участника висит на группе целиком, а между самой
+   карточкой и её видео зазора нет вообще. */
+.p-group{margin-bottom:10px;}
+.p-group .card{margin-bottom:0;}
+.p-group .vid-row{margin-bottom:0;margin-top:-1px;}
 .card .head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;}
 .card .name{font-family:"Unbounded",sans-serif;font-weight:600;font-size:15px;text-transform:uppercase;flex-shrink:0;}
 /* Бейдж статуса (Норма/Форс/...) — в одну строку с именем и числом
@@ -336,20 +343,47 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   --chat-bg:#121316; --chat-surface:#1b1d22; --chat-surface2:#22252b; --chat-border:#2c2f36;
   --chat-primary:#8774E1; --chat-mine:#6C5DD3; --chat-text:#e8eaed; --chat-muted:#9aa0a8;
 }
-.view.on#v-chat{display:flex;flex-direction:column;min-height:calc(100vh - 230px);
-  background:var(--chat-bg);margin:0 -12px;padding:10px 12px calc(90px + var(--safe-b));color:var(--chat-text);}
+/* Раньше #v-chat скроллился вместе со всей страницей (window), а "низ"
+   ловили вычислением document.body.scrollHeight — это требовало точно
+   знать итоговую высоту документа В МОМЕНТ прокрутки, а она "гуляла":
+   min-height у #v-chat был подобран под старую шапку без верхней
+   навигации, после её добавления число разошлось с реальной высотой
+   шапки, и последний пузырь оказывался неизвестно где, а не у низа.
+   Плюс любая асинхронная картинка/видео в сообщении, догрузившись
+   позже кадра прокрутки, дополнительно съезжала итоговую высоту.
+
+   Теперь #v-chat — сам себе скроллящийся контейнер с ЗАДАННОЙ высотой
+   (position:fixed, top/bottom считаются от реальных величин, не от
+   догадки): от низа закреплённой шапки (--header-h, меряется в JS,
+   см. syncHeaderHeightVar()) до самого низа экрана. Прокрутка внутри
+   него — el.scrollTop = el.scrollHeight — детерминирована и не зависит
+   от того, что творится с остальной страницей. */
+.view.on#v-chat{position:fixed;left:50%;transform:translateX(-50%);
+  width:100%;max-width:640px;top:var(--header-h);bottom:0;
+  display:flex;flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  background:var(--chat-bg);padding:10px 12px calc(90px + var(--safe-b));color:var(--chat-text);z-index:5;}
+/* #chat-wrap раньше был обычным блочным div между #v-chat (flex) и
+   .chat-log (flex) — вставленным между двумя флекс-уровнями блочным
+   элементом, который НЕ передаёт flex дальше. Из-за этого .chat-log{flex:1}
+   был no-op (flex действует только когда сам элемент — flex-item, то
+   есть когда его РОДИТЕЛЬ display:flex), а .chat-log получал высоту
+   исключительно по своему контенту — вот откуда "пузырь висит
+   где-то посередине": лента вообще не дотягивалась до низа контейнера,
+   scrollTop/scrollHeight тут ни при чём. Делаем #chat-wrap тоже
+   flex-колонкой, чтобы flex:1 у .chat-log наконец сработал по цепочке. */
+/* Без min-height:0 нарочно: #chat-wrap не сам скроллится (скроллится
+   #v-chat снаружи), поэтому ему, наоборот, НУЖНО расти по контенту —
+   с min-height:0 контейнер отчитывался бы заниженной высотой (по
+   flex-доле, а не по реальному контенту), и переполняющая его лента
+   заезжала бы поверх padding-bottom у #v-chat, "съедая" зарезервированный
+   отступ под композер вместо того, чтобы честно добавлять его после
+   себя — низ последнего сообщения при долгой ленте оказывался вровень
+   с самым краем экрана, а не над полем ввода. */
+#chat-wrap{flex:1;display:flex;flex-direction:column;}
 /* justify-content:flex-end — когда сообщений мало и они не заполняют
-   всю высоту вкладки (flex:1 у самого контейнера), последний пузырь
-   должен стоять прямо над полем ввода, а не прилипать к верху с
-   пустотой под собой до самого композера. */
-/* padding-bottom с запасом: композер — position:fixed и физически
-   перекрывает нижнюю часть ленты независимо от прокрутки, а его
-   реальная высота (пузырь ввода + отступы формы) плюс safe-area внизу
-   экрана (до ~34px на iPhone с Face ID) в сумме больше, чем казалось —
-   было 70px без safe-area, последнее сообщение реально пряталось под
-   полем ввода. */
-.chat-log{flex:1;display:flex;flex-direction:column;justify-content:flex-end;
-  padding-bottom:calc(90px + var(--safe-b));}
+   весь контейнер, последний пузырь должен стоять прямо над полем
+   ввода, а не прилипать к верху с пустотой под собой до композера. */
+.chat-log{flex:1;display:flex;flex-direction:column;justify-content:flex-end;}
 
 .chat-day{align-self:center;font-size:11.5px;font-weight:600;color:var(--chat-muted);
   background:rgba(127,127,127,.22);padding:4px 12px;margin:10px 0 6px;border-radius:12px;}

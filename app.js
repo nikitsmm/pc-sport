@@ -398,6 +398,14 @@
       var st = statusOf(p, date);
       var used = altUsed(p, date);
 
+      /* Карточка + видео-блок этого же участника едут одной группой —
+         внешний отступ (до следующего участника) висит на группе целиком,
+         а между самой карточкой и её видео зазора нет вообще (по прямому
+         запросу — раньше между ними оставался обычный межблочный отступ,
+         как будто это два разных, не связанных друг с другом блока). */
+      var group = document.createElement('div');
+      group.className = 'p-group';
+
       var card = document.createElement('div');
       card.className = 'card' + (gone ? ' gone' : '');
 
@@ -444,10 +452,12 @@
       }
 
       card.innerHTML = body;
-      host.appendChild(card);
+      group.appendChild(card);
 
       var videoRow = renderParticipantVideoRow(p, date, canRecord);
-      if (videoRow) host.insertAdjacentHTML('beforeend', videoRow);
+      if (videoRow) group.insertAdjacentHTML('beforeend', videoRow);
+
+      host.appendChild(group);
     });
 
     host.querySelectorAll('.status-row button').forEach(function (b) {
@@ -1155,6 +1165,36 @@
     return pills ? '<div class="msg-reactions">' + pills + '</div>' : '';
   }
 
+  /* Реакция меняет ОДНО сообщение — раньше после неё звали полный
+     renderChat() (весь <innerHTML> ленты пересобирался заново), из-за
+     чего лента визуально "дёргалась"/перерисовывалась целиком на
+     ровном месте. Теперь патчим точечно: только .msg-reactions именно
+     этого сообщения, остальной DOM (и текущая прокрутка) не трогаем. */
+  function patchMessageReactions(messageId) {
+    var row = document.querySelector('.msg-row[data-mid="' + messageId + '"]');
+    var m = chatMessages.filter(function (x) { return x.id === messageId; })[0];
+    if (!row || !m) return;
+    var col = row.querySelector('.msg-col');
+    if (!col) return;
+    var existing = col.querySelector('.msg-reactions');
+    var html = renderReactions(m);
+    if (!html) { if (existing) existing.remove(); return; }
+    if (existing) existing.outerHTML = html; else col.insertAdjacentHTML('beforeend', html);
+    col.querySelectorAll('.react-pill').forEach(wireReactPill);
+  }
+
+  function wireReactPill(b) {
+    b.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var myIdVal = myId();
+      Storage.chat.react(myIdVal, b.dataset.mid, b.dataset.emoji).then(function (updated) {
+        var m = chatMessages.filter(function (x) { return x.id === b.dataset.mid; })[0];
+        if (m) m.reactions = updated.reactions;
+        patchMessageReactions(b.dataset.mid);
+      }).catch(function (e2) { PCLog.warn('Реакция не отправилась: ' + e2.message); });
+    });
+  }
+
   function renderReplyQuote(m) {
     if (!m.replyTo) return '';
     var orig = chatMessages.filter(function (x) { return x.id === m.replyTo; })[0];
@@ -1222,6 +1262,27 @@
     return ' <span class="read-count">' + label + '</span>';
   }
 
+  /* Курсоры прочитанного (chatReadState) меняются почти на каждом опросе
+     чата — кто угодно мог просто открыть вкладку и продвинуть свой
+     курсор — а раньше ЛЮБОЕ такое изменение вызывало полный renderChat()
+     (целиком пересобранный <innerHTML>, заново навешанные слушатели,
+     заново задёрганная прокрутка). Именно это выглядело как "лента
+     дёргается/перерисовывается сама по себе" — визуально ничего не
+     менялось, кроме счётчика "N/4" у собственных сообщений. Патчим
+     только эти счётчики точечно, без перерисовки всего остального. */
+  function patchReadCounts() {
+    var myIdVal = myId();
+    var total = (state.participants || []).length;
+    if (!total) return;
+    chatMessages.forEach(function (m) {
+      if (m.participantId !== myIdVal || m.pending || !m.seq) return;
+      var el = document.querySelector('.msg-row[data-mid="' + m.id + '"] .read-count');
+      if (!el) return;
+      var count = readersOf(m).length;
+      el.textContent = count >= total ? '+' : (count + '/' + total);
+    });
+  }
+
   function formatFileSize(bytes) {
     if (!bytes) return '';
     var kb = Math.round(bytes / 1024);
@@ -1283,9 +1344,11 @@
     closeMessageMenu(); // список может пересобраться под открытым меню — не оставляем меню "повисшим"
 
     var log = $('#chat-log');
-    /* Тот же нюанс, что и в scrollChatToBottom(): у #chat-log нет
-       своего overflow, скроллится вся страница (окно), не div. */
-    var wasAtBottom = (document.body.scrollHeight - window.scrollY - window.innerHeight) < 80;
+    /* #v-chat — сам скроллящийся контейнер (см. scrollChatToBottom). */
+    var chatElForBottom = document.getElementById('v-chat');
+    var wasAtBottom = chatElForBottom
+      ? (chatElForBottom.scrollHeight - chatElForBottom.scrollTop - chatElForBottom.clientHeight) < 80
+      : true;
 
     var divider = computeUnreadDivider(myId);
 
@@ -1345,16 +1408,7 @@
        больше нет, иначе клик срабатывал бы дважды. */
     loadChatImages(log);
 
-    log.querySelectorAll('.react-pill').forEach(function (b) {
-      b.addEventListener('click', function (e) {
-        e.stopPropagation();
-        Storage.chat.react(myId, b.dataset.mid, b.dataset.emoji).then(function (updated) {
-          var m = chatMessages.filter(function (x) { return x.id === b.dataset.mid; })[0];
-          if (m) m.reactions = updated.reactions;
-          renderChat();
-        }).catch(function (e2) { PCLog.warn('Реакция не отправилась: ' + e2.message); });
-      });
-    });
+    log.querySelectorAll('.react-pill').forEach(wireReactPill);
 
     /* Тап по строке — либо переключает выбор (в режиме выбора), либо
        открывает меню действий. Зажатие (долгий тап) на пузыре сразу
@@ -1452,6 +1506,8 @@
     messageMenuEls = null;
     window.removeEventListener('scroll', closeMessageMenu);
     window.removeEventListener('resize', closeMessageMenu);
+    var chatEl = document.getElementById('v-chat');
+    if (chatEl) chatEl.removeEventListener('scroll', closeMessageMenu);
   }
 
   function openMessageMenu(m, bubbleEl) {
@@ -1495,6 +1551,8 @@
     backdrop.addEventListener('click', closeMessageMenu);
     window.addEventListener('scroll', closeMessageMenu, { passive: true });
     window.addEventListener('resize', closeMessageMenu);
+    var chatElForMenu = document.getElementById('v-chat');
+    if (chatElForMenu) chatElForMenu.addEventListener('scroll', closeMessageMenu, { passive: true });
 
     panel.querySelectorAll('.quick-react').forEach(function (b) {
       b.addEventListener('click', function () {
@@ -1502,7 +1560,7 @@
         Storage.chat.react(myIdVal, m.id, b.dataset.emoji).then(function (updated) {
           var mm = chatMessages.filter(function (x) { return x.id === m.id; })[0];
           if (mm) mm.reactions = updated.reactions;
-          renderChat();
+          patchMessageReactions(m.id);
         }).catch(function (e) { PCLog.warn('Реакция не отправилась: ' + e.message); });
       });
     });
@@ -1633,11 +1691,23 @@
     var byId = {};
     chatMessages.forEach(function (m) { byId[m.id] = m; });
     var changed = false;
+    var newVideo = false;
     items.forEach(function (m) {
       if (!byId[m.id]) {
         chatMessages.push(m);
         byId[m.id] = m;
         changed = true;
+        /* Видео-карточка в чате — тот же самый ролик, что и в списке
+           "N/N" на главной (id видео = id карточки-сообщения, см.
+           Storage.chat.sendVideo). Раньше главная страница узнавала о
+           видео ДРУГОГО участника только на своём boot()/"Обновить" —
+           если открыть приложение раньше, чем кто-то залил ролик, реп
+           так и оставался 0 до ручного обновления. Чат уже опрашивается
+           непрерывно на всех экранах — используем этот же тик, чтобы и
+           видео-индекс подтягивался сам, без отдельного постоянного
+           опроса бакета (он тяжелее — полный список S3, см. reconcile
+           в backend). */
+        if (m.type === 'video') newVideo = true;
       } else if (JSON.stringify(byId[m.id].reactions || {}) !== JSON.stringify(m.reactions || {})) {
         /* Сообщение уже известно — но, например, кто-то другой поставил
            реакцию на него. Обновляем на месте, не просто добавляем новые. */
@@ -1658,6 +1728,7 @@
       chatMessages.sort(function (a, b) { return (a.at || '') < (b.at || '') ? -1 : 1; });
       Storage.chat.writeCache(chatMessages);
     }
+    if (newVideo) refreshVideoIndex();
     return changed;
   }
 
@@ -1709,8 +1780,8 @@
       if (changed || readChanged) {
         var onChatTab = document.getElementById('v-chat').classList.contains('on');
         if (onChatTab && !document.hidden) {
-          if (changed) markChatRead();
-          renderChat();
+          if (changed) { markChatRead(); renderChat(); }
+          else patchReadCounts(); // только счётчики "N/4" — без полной пересборки ленты
         } else if (newFromOthers.length) {
           bumpChatUnread(newFromOthers.length);
           notifyNewMessages(newFromOthers);
@@ -2199,16 +2270,12 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v52', items: [
-      'Норма показывает реальную сумму повторений из видео (X/N), а не только норму — и видна сразу при открытии, без нужды листать день туда-сюда',
-      'Норму/статус можно снова выключить себе назад, если поставили по ошибке',
-      'Видео из галереи (не со съёмки в приложении) теперь превью, а не файл-чип',
-      'Подтверждение превышения нормы — кнопки «Да» / «Нет» вместо ОК/Отмена',
-      'Чат: счётчик прочитавших (0/4…+) вместо галочек, с кнопкой «Кто прочитал» в меню своего сообщения',
-      'Чат всегда открывается внизу и доприклеивается туда, даже если в сообщениях есть картинки/видео, догружающиеся позже',
-      'Значок приложения учитывает и новые видео, не только текстовые сообщения',
-      'Смена нормы/альт/форс/пропуск теперь тоже приходит сообщением в чат',
-      'Главный экран: имена по алфавиту, видео каждого — сразу под его карточкой, кнопки статусов ниже'
+    { v: 'v53', items: [
+      'Найдена настоящая причина бага с чатом: лента была вложена на уровень глубже, чем нужно для CSS-растяжения, поэтому не дотягивалась до низа контейнера — теперь это по-настоящему свой скроллящийся блок, а не игра с прокруткой всей страницы',
+      'Видео других участников теперь видно на главной без ручного обновления — реп обновляется сам, когда кто-то грузит видео',
+      'Реакция на сообщение больше не перерисовывает весь чат целиком — только сама реакция, без "дёрганья" ленты',
+      'Счётчик "кто прочитал" тоже больше не вызывает перерисовку всего чата — обновляется точечно',
+      'Убран зазор между карточкой участника и его видео на главной — теперь один блок'
     ] }
   ];
 
@@ -2307,6 +2374,7 @@
 
     if (view === 'chat') {
       chatStickToBottom = true; // открытие — всегда считаем, что едем в самый низ
+      syncHeaderHeightVar();
       prepareUnreadSnapshot();
       markChatRead();
       renderChat();
@@ -2332,35 +2400,35 @@
      scrollHeight/scrollTop ещё не отражают реальную раскладку. Двойной
      rAF — layout успевает посчитаться перед тем, как прокручиваем. */
   function scrollChatToBottom() {
-    /* У #chat-log нет своего overflow — как и везде в приложении,
-       скроллится вся страница целиком (body), не отдельный div. Раньше
-       здесь стояло log.scrollTop = log.scrollHeight — это no-op на
-       нескроллящемся элементе, поэтому прокрутка вниз не срабатывала
-       вообще. */
-    function toBottom() { window.scrollTo(0, document.body.scrollHeight); }
+    /* #v-chat теперь сам себе скроллящийся контейнер с ЗАДАННОЙ высотой
+       (position:fixed, top/bottom — см. styles.css) — el.scrollTop =
+       el.scrollHeight детерминирован сам по себе. Двойной rAF всё равно
+       не лишний: сама разметка (layout) под только что вставленный
+       innerHTML применяется не мгновенно в момент присваивания, а к
+       следующему кадру отрисовки. */
+    var el = document.getElementById('v-chat');
+    if (!el) return;
+    function toBottom() { el.scrollTop = el.scrollHeight; }
     requestAnimationFrame(function () {
       requestAnimationFrame(toBottom);
     });
-    /* Двойного rAF иногда не хватает — если в новых сообщениях есть
-       аватары/превью, их размеры (а значит и итоговая высота ленты)
-       могут доуточниться уже ПОСЛЕ кадра отрисовки (декодирование
-       картинки, довычисление шрифта). Без этого запасного прохода
-       именно на "чат с новыми сообщениями" низ иногда оказывался под
-       полем ввода — сама прокрутка происходила чуть раньше, чем
-       страница окончательно "устаканивалась" по высоте. */
+    /* Запасной проход — если в новых сообщениях есть аватары/превью, их
+       размеры (а значит и итоговая высота ленты) могут доуточниться уже
+       ПОСЛЕ кадра отрисовки (декодирование картинки, довычисление
+       шрифта). Без этого низ иногда оказывался чуть выше настоящего. */
     setTimeout(toBottom, 250);
   }
 
   /* Кнопка "вниз" (как в Telegram) — всплывает, когда пролистал ленту
      чата вверх дальше чем на экран, и пропадает у самого низа. Скролл —
-     всей страницы (window), не отдельного контейнера, см. пояснение
-     выше про #chat-log без своего overflow. */
+     внутри самого #v-chat (см. styles.css), не всей страницы. */
   var SCROLL_BOTTOM_THRESHOLD = 200;
   function updateScrollBottomBtn() {
     var btn = document.getElementById('scroll-bottom-btn');
-    if (!btn) return;
-    if (!document.getElementById('v-chat').classList.contains('on')) { btn.hidden = true; return; }
-    var distance = document.body.scrollHeight - window.scrollY - window.innerHeight;
+    var el = document.getElementById('v-chat');
+    if (!btn || !el) return;
+    if (!el.classList.contains('on')) { btn.hidden = true; return; }
+    var distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     btn.hidden = distance < SCROLL_BOTTOM_THRESHOLD;
     chatStickToBottom = distance < SCROLL_BOTTOM_THRESHOLD;
   }
@@ -2387,8 +2455,9 @@
     if (replyBar && !replyBar.hidden) {
       replyBar.style.bottom = (bottom + composer.getBoundingClientRect().height) + 'px';
     }
-    if (kb > 40 && document.getElementById('v-chat').classList.contains('on')) {
-      window.scrollTo(0, document.body.scrollHeight);
+    var chatEl = document.getElementById('v-chat');
+    if (kb > 40 && chatEl && chatEl.classList.contains('on')) {
+      chatEl.scrollTop = chatEl.scrollHeight;
     }
   }
 
@@ -2404,7 +2473,7 @@
       b.addEventListener('click', function () { show(b.dataset.view); });
     });
 
-    window.addEventListener('scroll', updateScrollBottomBtn, { passive: true });
+    $('#v-chat').addEventListener('scroll', updateScrollBottomBtn, { passive: true });
     $('#scroll-bottom-btn').addEventListener('click', function () {
       scrollChatToBottom();
       markChatRead();
@@ -2764,12 +2833,33 @@
   /* ============================================================
      Старт
      ============================================================ */
+  /* Реальная высота закреплённой шапки (--header-h) — от неё #v-chat
+     (см. styles.css) отсчитывает свой top, чтобы быть скроллящимся
+     контейнером РОВНО от низа шапки до низа экрана, без зазоров и без
+     наезда. Раньше это было магическое число 230px в CSS, подобранное
+     на глаз под шапку БЕЗ верхней навигации — как только навигацию
+     добавили, число разошлось с реальностью, и вся геометрия чата
+     поехала (отсюда и "пузырь висит где-то посередине"). Меряем
+     реальный DOM вместо того, чтобы гадать. */
+  function syncHeaderHeightVar() {
+    var header = document.getElementById('header-sticky');
+    if (!header) return;
+    document.documentElement.style.setProperty('--header-h', header.offsetHeight + 'px');
+  }
+
   function boot() {
     state = normalize(Storage.readLocal());
     chatMessages = Storage.chat.readCache();
     cursor = today();
     bind();
     render();
+    syncHeaderHeightVar();
+    /* Шрифты (Unbounded/IBM Plex) могут доподгрузиться уже после
+       первого замера и на пиксель-два изменить высоту шапки — один
+       отложенный повторный замер подчищает такую погрешность. */
+    setTimeout(syncHeaderHeightVar, 400);
+    window.addEventListener('resize', syncHeaderHeightVar);
+    window.addEventListener('orientationchange', function () { setTimeout(syncHeaderHeightVar, 200); });
     initChatKeyboardOffset();
     tick();
     setInterval(tick, 1000);
