@@ -35,6 +35,14 @@
   var recSession = null;  // { stream, ctrl, participantId, date, blob, ext }
   var chatMessages = [];  // все известные сообщения, отсортированные по времени
   var chatReadState = {}; // {participantId: lastReadSeq} — курсоры прочитанного, см. счётчик "N/4" в чате
+  /* Держится ли сейчас лента "прилипшей" к низу — правда только пока
+     юзер реально внизу (или только что открыл чат). Картинки/видео из
+     скрепки догружаются асинхронно (presigned-ссылка) уже ПОСЛЕ того,
+     как renderChat/scrollChatToBottom отработали, и своим появлением
+     дальше отодвигают настоящий низ — без этого флага лента оставалась
+     прокрученной туда, где низ был ДО их загрузки (визуально: последний
+     пузырь висит где-то посередине). См. setCardMedia ниже. */
+  var chatStickToBottom = true;
   var chatPollTimer = null;
 
   /* ============================================================
@@ -343,9 +351,9 @@
   var $ = function (s) { return document.querySelector(s); };
 
   /* Видео-блок ОДНОГО участника — раньше рендерился отдельно ото всех,
-     общим списком под всеми карточками (см. историю renderVideos ниже
-     по git-блейму). По прямому запросу — сразу под карточкой именно
-     этого человека, чтобы не листать вниз, сопоставляя, где чьё видео. */
+     общим списком под всеми карточками. По прямому запросу — сразу под
+     карточкой именно этого человека, чтобы не листать вниз, сопоставляя,
+     где чьё видео. */
   function renderParticipantVideoRow(p, date, canRecord) {
     if (!Storage.video.supported()) return '';
     var gone = !activeOn(p, date);
@@ -494,7 +502,7 @@
     if (!Storage.video.supported()) return Promise.resolve();
     return Storage.video.list().then(function (r) {
       videoIndex = r || { items: [], retentionDays: 0 };
-      renderVideos();
+      renderToday();
       if (videoIndex.retentionDays && $('#cfg-retention-days')) {
         $('#cfg-retention-days').textContent = videoIndex.retentionDays;
       }
@@ -985,6 +993,15 @@
       card.innerHTML = ''; // иначе loadChatImages увидит тут же сломанный элемент и решит, что грузить нечего
       loadChatImages(card.parentElement || document);
     };
+    /* Догрузка каждой картинки/видео (presigned-ссылка приходит уже
+       ПОСЛЕ того, как renderChat/scrollChatToBottom отработали) может
+       раздвинуть высоту ленты и оставить низ прокрутки не там, где
+       настоящий последний пузырь. Если юзер был приклеен к низу —
+       доприклеиваем ещё раз, когда именно этот элемент довычислит
+       размер. */
+    el.addEventListener(isVideo ? 'loadedmetadata' : 'load', function () {
+      if (chatStickToBottom) scrollChatToBottom();
+    });
     el.src = url;
     card.appendChild(el);
   }
@@ -2182,13 +2199,13 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v51', items: [
-      'Норма показывает реальную сумму повторений из видео (X/N), а не только норму',
+    { v: 'v52', items: [
+      'Норма показывает реальную сумму повторений из видео (X/N), а не только норму — и видна сразу при открытии, без нужды листать день туда-сюда',
       'Норму/статус можно снова выключить себе назад, если поставили по ошибке',
       'Видео из галереи (не со съёмки в приложении) теперь превью, а не файл-чип',
       'Подтверждение превышения нормы — кнопки «Да» / «Нет» вместо ОК/Отмена',
       'Чат: счётчик прочитавших (0/4…+) вместо галочек, с кнопкой «Кто прочитал» в меню своего сообщения',
-      'Чат всегда открывается внизу, новые сообщения не прячутся под полем ввода',
+      'Чат всегда открывается внизу и доприклеивается туда, даже если в сообщениях есть картинки/видео, догружающиеся позже',
       'Значок приложения учитывает и новые видео, не только текстовые сообщения',
       'Смена нормы/альт/форс/пропуск теперь тоже приходит сообщением в чат',
       'Главный экран: имена по алфавиту, видео каждого — сразу под его карточкой, кнопки статусов ниже'
@@ -2289,6 +2306,7 @@
     $('#topnav-back').hidden = isHome;
 
     if (view === 'chat') {
+      chatStickToBottom = true; // открытие — всегда считаем, что едем в самый низ
       prepareUnreadSnapshot();
       markChatRead();
       renderChat();
@@ -2344,6 +2362,7 @@
     if (!document.getElementById('v-chat').classList.contains('on')) { btn.hidden = true; return; }
     var distance = document.body.scrollHeight - window.scrollY - window.innerHeight;
     btn.hidden = distance < SCROLL_BOTTOM_THRESHOLD;
+    chatStickToBottom = distance < SCROLL_BOTTOM_THRESHOLD;
   }
 
   /* Держит композер (и панель ответа над ним) прижатыми к клавиатуре

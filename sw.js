@@ -7,7 +7,7 @@
    телефон в сети, всегда грузится свежее; кэш нужен только когда сети
    вообще нет. */
 
-var CACHE = 'pcsport-v51';
+var CACHE = 'pcsport-v52';
 var SHELL = [
   './',
   'index.html',
