@@ -567,10 +567,21 @@
 
       /* since — id последнего уже известного сообщения, чтобы не
          перекачивать всю историю на каждый опрос. */
+      /* r.readState — {participantId: lastReadSeq} по всем 4 участникам,
+         едет вместе с сообщениями (см. action_get_messages), отдельного
+         запроса не нужно. */
       fetch: async function (since) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) return { items: [] };
         return api(cfg.url, 'get_messages', since ? { since: since } : {});
+      },
+
+      /* Курсор "докуда дочитал" — best-effort, не апим ошибками наружу
+         (не тот случай, где стоит прерывать пользователя alert'ом). */
+      markRead: async function (participantId) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) return;
+        return api(cfg.url, 'mark_read', { participantId: participantId });
       },
 
       send: async function (participantId, text, replyTo, clientId) {

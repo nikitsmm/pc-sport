@@ -34,6 +34,7 @@
   var videoIndex = { items: [], retentionDays: 0 };  // кэш ответа list_videos
   var recSession = null;  // { stream, ctrl, participantId, date, blob, ext }
   var chatMessages = [];  // все известные сообщения, отсортированные по времени
+  var chatReadState = {}; // {participantId: lastReadSeq} — курсоры прочитанного, см. счётчик "N/4" в чате
   var chatPollTimer = null;
 
   /* ============================================================
@@ -116,15 +117,24 @@
     var prevRec = state.days[date] ? state.days[date][p.id] : undefined;
 
     if (!state.days[date]) state.days[date] = {};
-    if (!status) delete state.days[date][p.id];
-    else state.days[date][p.id] = { status: status, at: new Date().toISOString() };
-    if (!Object.keys(state.days[date]).length) delete state.days[date];
+    /* Раньше при снятии статуса (второй тап по уже активной кнопке)
+       запись просто УДАЛЯЛАСЬ локально — и вместе с ней пропадал сам
+       факт, что что-то поменялось: следующая отправка на сервер молча
+       ничего не говорила об этой ячейке, старый статус так и оставался
+       в day_marks на chatstore и возвращался обратно при следующей
+       синхронизации — снять отметку было физически нельзя. Теперь
+       снятие — это явная запись {status: null, at: ...}, такая же
+       "настоящая" смена, как и любая другая, только со значением null;
+       chatstore теперь понимает null как команду удалить строку (см.
+       chatstore/app.py). statusOf()/остальной код уже трактует
+       status:null как "не отмечено", отдельно ничего чинить не пришлось. */
+    state.days[date][p.id] = { status: status || null, at: new Date().toISOString() };
 
     state.updatedAt = new Date().toISOString();
     Storage.writeLocal(state);
     render();
     clearTimeout(saveTimer); // эта отметка уже уходит немедленно — отложенному commit() досылать нечего
-    saveStatusImmediately(date, p.id, prevRec);
+    saveStatusImmediately(date, p.id, prevRec, status, p);
   }
 
   function showSaveStatus(kind, text) {
@@ -139,7 +149,7 @@
     }
   }
 
-  function saveStatusImmediately(date, participantId, prevRec) {
+  function saveStatusImmediately(date, participantId, prevRec, status, p) {
     showSaveStatus('pending', 'Записываю…');
     setSyncDot('pending');
     Storage.pull().then(function (remote) {
@@ -154,6 +164,14 @@
         showSaveStatus('ok', 'Записано ✓');
         setSyncDot('ok');
         render();
+        /* По прямому запросу — как и с видео, отметка нормы/альт/форс/
+           пропуск тоже сопровождается сообщением в общем чате. Только
+           при УСТАНОВКЕ (status truthy) — снятие отметки (повторный тап)
+           отдельно не анонсируем, это не то событие, которое интересно
+           остальным. Best-effort, как и везде с chatAnnounce. */
+        if (status && p) {
+          chatAnnounce(participantId, GLYPH[status] + ' ' + p.name + ' — «' + LABEL[status] + '» за ' + shortDate(date));
+        }
       } else {
         showSaveStatus('err', 'Облако не настроено — сохранено только на этом телефоне');
         setSyncDot('local');
@@ -299,7 +317,20 @@
   function normalize(s) {
     var out = JSON.parse(JSON.stringify(DEFAULTS));
     if (s && typeof s === 'object') {
-      Object.keys(DEFAULTS).forEach(function (k) { if (s[k] !== undefined) out[k] = s[k]; });
+      /* !== undefined тут раньше пропускал null — а сервер (chatstore)
+         честно отдаёт SQL NULL как JSON null, не как отсутствие ключа.
+         Один раз так и вышло на боевых данных: anchor/fine/altLimit/
+         maxMult/deadline пришли null-ями (после ручного сброса конфига
+         на сервере при разработке), null просуществовал в out поверх
+         нормального умолчания, и multiplier() потом считал Math.min(x,
+         null) — null в числовом сравнении ведёт себя как 0, у всех
+         обнулились нормы. updatedAt — намеренное исключение: null там
+         означает "ещё не сохранялось" и это ЛЕГИТИМНОЕ значение по
+         умолчанию, не "забыли прислать". */
+      Object.keys(DEFAULTS).forEach(function (k) {
+        if (k === 'updatedAt') { if (s[k] !== undefined) out[k] = s[k]; return; }
+        if (s[k] !== undefined && s[k] !== null) out[k] = s[k];
+      });
       if (!Array.isArray(out.participants) || !out.participants.length) out.participants = DEFAULTS.participants;
       if (!out.days || typeof out.days !== 'object') out.days = {};
     }
@@ -311,6 +342,34 @@
      ============================================================ */
   var $ = function (s) { return document.querySelector(s); };
 
+  /* Видео-блок ОДНОГО участника — раньше рендерился отдельно ото всех,
+     общим списком под всеми карточками (см. историю renderVideos ниже
+     по git-блейму). По прямому запросу — сразу под карточкой именно
+     этого человека, чтобы не листать вниз, сопоставляя, где чьё видео. */
+  function renderParticipantVideoRow(p, date, canRecord) {
+    if (!Storage.video.supported()) return '';
+    var gone = !activeOn(p, date);
+    var clips = videoIndex.items.filter(function (v) { return v.participantId === p.id && v.date === date; });
+    var thumbs = clips.map(function (v) {
+      var inner = v.thumb ? '<img src="' + v.thumb + '" alt="">' : '▶';
+      var reps = v.reps ? '<span class="vid-reps">' + v.reps + '</span>' : '';
+      var daysLeft = videoIndex.retentionDays ? videoIndex.retentionDays - diffDays(v.date, today()) : null;
+      var expiry = (daysLeft !== null && daysLeft <= 1)
+        ? '<span class="vid-expiry" title="Удалится по расписанию">' + (daysLeft <= 0 ? 'сегодня' : 'завтра') + '</span>'
+        : '';
+      var del = v.participantId === myId()
+        ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" data-delname="' + p.name + '" data-deldate="' + shortDate(v.date) + '" title="Удалить видео">✕</button>'
+        : '';
+      return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
+             inner + reps + expiry + '</button>' + del + '</div>';
+    }).join('');
+    var addBtn = (!gone && canRecord && p.id === myId())
+      ? '<button class="vid-add" data-rec="' + p.id + '" title="Записать видео">＋</button>'
+      : '';
+    if (!thumbs && !addBtn) return '';
+    return '<div class="vid-row"><div class="clips">' + thumbs + addBtn + '</div></div>';
+  }
+
   function renderToday() {
     var date = cursor;
     $('#d-label').textContent = (date === today() ? 'Сегодня — ' : '') + human(date);
@@ -318,8 +377,14 @@
 
     var host = $('#today-cards');
     host.innerHTML = '';
+    var canRecord = Storage.video.supported() && PCVideo.supported();
 
-    state.participants.forEach(function (p) {
+    /* По алфавиту — по прямому запросу (раньше был порядок как в
+       настройках/state.participants, произвольный). localeCompare с
+       локалью 'ru', чтобы Ё и прочие буквы сортировались правильно. */
+    var sorted = state.participants.slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'ru'); });
+
+    sorted.forEach(function (p) {
       var gone = !activeOn(p, date);
       var t = task(p, date);
       var st = statusOf(p, date);
@@ -332,15 +397,24 @@
       if (t.mult > 1) badges += '<span class="badge mult' + (t.mult >= 4 ? ' m4' : t.mult === 3 ? ' m3' : '') + '">Отработка ×' + t.mult + '</span>';
       if (st) badges += ' <span class="badge ' + st + '">' + LABEL[st] + '</span>';
 
+      /* X/N — сколько реально сделано (сумма повторений из ВСЕХ видео
+         этого участника за этот день, roликов может быть несколько) из
+         нужного по норме на сегодня. Раньше показывали только N (саму
+         норму) — по прямому запросу теперь виден и фактический прогресс. */
+      var doneReps = videoIndex.items
+        .filter(function (v) { return v.participantId === p.id && v.date === date; })
+        .reduce(function (sum, v) { return sum + (v.reps || 0); }, 0);
+
       var repsLine = gone
         ? '<span class="ex">вышел из челленджа</span>'
-        : '<b>' + t.reps + '</b> <span class="ex">' + EXNAME[t.ex] + (t.mult > 1 ? ' (' + t.base + '×' + t.mult + ')' : '') + '</span>';
+        : '<b>' + doneReps + '/' + t.reps + '</b> <span class="ex">' + EXNAME[t.ex] + (t.mult > 1 ? ' (' + t.base + '×' + t.mult + ')' : '') + '</span>';
 
       var body =
         '<div class="head">' +
           '<div class="name">' + p.name + '</div>' +
-          '<div class="stat">' + (badges ? '<div class="badges-inline">' + badges + '</div>' : '') +
+          '<div class="stat">' +
             '<div class="reps-line">' + repsLine + '</div>' +
+            (badges ? '<div class="badges-inline">' + badges + '</div>' : '') +
           '</div>' +
         '</div>';
 
@@ -363,6 +437,9 @@
 
       card.innerHTML = body;
       host.appendChild(card);
+
+      var videoRow = renderParticipantVideoRow(p, date, canRecord);
+      if (videoRow) host.insertAdjacentHTML('beforeend', videoRow);
     });
 
     host.querySelectorAll('.status-row button').forEach(function (b) {
@@ -372,57 +449,6 @@
         setStatus(p, cursor, statusOf(p, cursor) === b.dataset.s ? null : b.dataset.s);
       });
     });
-
-    var left = state.participants.filter(function (p) { return p.leftAt; });
-    $('#today-banner').innerHTML = left.length
-      ? '<div class="empty" style="margin-top:12px;border-color:var(--signal);color:var(--signal)">Челлендж завершён: ' +
-        left.map(function (p) { return p.name; }).join(', ') + ' вышел ' + shortDate(left[0].leftAt) + '.</div>'
-      : '';
-
-    renderVideos();
-  }
-
-  /* ============================================================
-     Видео дня
-     ============================================================ */
-  function renderVideos() {
-    var host = $('#today-videos');
-    if (!host) return;
-    var date = cursor;
-    var canRecord = Storage.video.supported() && PCVideo.supported();
-
-    if (!Storage.video.supported()) {
-      host.innerHTML = '<div class="empty">Видео работают только при включённой облачной синхронизации — настрой её на вкладке «Настройки».</div>';
-      return;
-    }
-
-    host.innerHTML = state.participants.map(function (p) {
-      var gone = !activeOn(p, date);
-      var clips = videoIndex.items.filter(function (v) { return v.participantId === p.id && v.date === date; });
-      var thumbs = clips.map(function (v) {
-        var inner = v.thumb ? '<img src="' + v.thumb + '" alt="">' : '▶';
-        var reps = v.reps ? '<span class="vid-reps">' + v.reps + '</span>' : '';
-        var daysLeft = videoIndex.retentionDays ? videoIndex.retentionDays - diffDays(v.date, today()) : null;
-        var expiry = (daysLeft !== null && daysLeft <= 1)
-          ? '<span class="vid-expiry" title="Удалится по расписанию">' + (daysLeft <= 0 ? 'сегодня' : 'завтра') + '</span>'
-          : '';
-        var del = v.participantId === myId()
-          ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" data-delname="' + p.name + '" data-deldate="' + shortDate(v.date) + '" title="Удалить видео">✕</button>'
-          : '';
-        return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
-               inner + reps + expiry + '</button>' + del + '</div>';
-      }).join('');
-      var addBtn = (!gone && canRecord && p.id === myId())
-        ? '<button class="vid-add" data-rec="' + p.id + '" title="Записать видео">＋</button>'
-        : '';
-      return '<div class="vid-row"><div class="who">' + p.name + '</div><div class="clips">' + thumbs + addBtn + '</div></div>';
-    }).join('');
-
-    if (videoIndex.retentionDays) {
-      host.insertAdjacentHTML('beforeend', '<p class="vid-empty-hint">Видео хранятся ' + videoIndex.retentionDays + ' ' +
-        plural(videoIndex.retentionDays, 'день', 'дня', 'дней') + ', потом удаляются автоматически.</p>');
-    }
-
     host.querySelectorAll('[data-rec]').forEach(function (b) {
       b.addEventListener('click', function () { openRecorder(b.dataset.rec); });
     });
@@ -446,6 +472,22 @@
         });
       });
     });
+
+    var left = state.participants.filter(function (p) { return p.leftAt; });
+    $('#today-banner').innerHTML = left.length
+      ? '<div class="empty" style="margin-top:12px;border-color:var(--signal);color:var(--signal)">Челлендж завершён: ' +
+        left.map(function (p) { return p.name; }).join(', ') + ' вышел ' + shortDate(left[0].leftAt) + '.</div>'
+      : '';
+
+    var hintHost = $('#today-videos');
+    if (hintHost) {
+      hintHost.innerHTML = !Storage.video.supported()
+        ? '<div class="empty">Видео работают только при включённой облачной синхронизации — настрой её на вкладке «Настройки».</div>'
+        : (videoIndex.retentionDays
+          ? '<p class="vid-empty-hint">Видео хранятся ' + videoIndex.retentionDays + ' ' +
+            plural(videoIndex.retentionDays, 'день', 'дня', 'дней') + ', потом удаляются автоматически.</p>'
+          : '');
+    }
   }
 
   function refreshVideoIndex() {
@@ -755,20 +797,32 @@
        карточке «Сегодня», с учётом отработки после форс-мажора) —
        раз человек всё равно вводит количество повторений к видео,
        грех не сравнить и не предложить сразу закрыть день, вместо
-       того чтобы потом отдельно идти отмечать галочку руками. */
+       того чтобы потом отдельно идти отмечать галочку руками. Свой
+       диалог (customConfirm), не встроенный confirm() — у стандартного
+       кнопки "OK/Отмена" даёт сама ОС, подписать их "Да/Нет" через
+       веб-API нельзя физически, только заменой на свою модалку. */
+    var needConfirm = false, need = 0, p = null;
     if (meta.reps) {
-      var p = state.participants.filter(function (x) { return x.id === s.participantId; })[0];
+      p = state.participants.filter(function (x) { return x.id === s.participantId; })[0];
       if (p && statusOf(p, s.date) !== 'done') {
-        var need = task(p, s.date).reps;
-        if (meta.reps >= need) {
-          if (confirm('Норма выполнена (' + meta.reps + ' из ' + need + ') — закрыть день как «Норма»?')) {
-            setStatus(p, s.date, 'done');
-            PCLog.info('Норма закрыта автоматически по видео: ' + who + ', ' + shortDate(s.date) + ' (' + meta.reps + '/' + need + ')');
-          }
-        }
+        need = task(p, s.date).reps;
+        needConfirm = meta.reps >= need;
       }
     }
 
+    if (needConfirm) {
+      customConfirm('Норма выполнена (' + meta.reps + ' из ' + need + ') — закрыть день как «Норма»?').then(function (yes) {
+        if (yes) {
+          setStatus(p, s.date, 'done');
+          PCLog.info('Норма закрыта автоматически по видео: ' + who + ', ' + shortDate(s.date) + ' (' + meta.reps + '/' + need + ')');
+        }
+        proceedWithVideoUpload();
+      });
+    } else {
+      proceedWithVideoUpload();
+    }
+
+    function proceedWithVideoUpload() {
     $('#rec-controls-preview').hidden = true;
     $('#rec-reps-row').hidden = true;
     $('#rec-controls-savefail').hidden = true;
@@ -815,6 +869,7 @@
       PCLog.error('Видео: загрузка не удалась (' + who + '): ' + e.message);
       chatAnnounce(s.participantId, '⚠️ Не получилось загрузить видео: ' + e.message);
     });
+    } // proceedWithVideoUpload
   }
 
   /* Ролик не ушёл в облако даже после повторов — не теряем его.
@@ -901,32 +956,37 @@
      optimistic-рендер) не трогаем — там <img> уже стоит. */
   function loadChatImages(log) {
     log.querySelectorAll('.chat-img-card[data-attach-path]').forEach(function (card) {
-      if (card.querySelector('img')) return;
+      if (card.querySelector('img, video')) return;
       var path = card.dataset.attachPath;
       if (!path) return;
-      if (attachUrlCache[path]) { setCardImage(card, attachUrlCache[path]); return; }
+      if (attachUrlCache[path]) { setCardMedia(card, attachUrlCache[path]); return; }
       Storage.chat.attachmentUrl(path).then(function (url) {
         attachUrlCache[path] = url;
-        setCardImage(card, url);
+        setCardMedia(card, url);
       }).catch(function () { card.innerHTML = '<div class="chat-img-spinner">⚠️</div>'; });
     });
   }
-  function setCardImage(card, url) {
+  /* И картинки, и видео из скрепки — один и тот же ленивый presigned-GET,
+     разница только в том, какой тег вставляем (data-kind="video" ставит
+     renderMessageBody для клипов, см. выше). */
+  function setCardMedia(card, url) {
     card.innerHTML = '';
-    var img = document.createElement('img');
-    img.alt = '';
+    var isVideo = card.dataset.kind === 'video';
+    var el = document.createElement(isVideo ? 'video' : 'img');
+    if (isVideo) { el.controls = true; el.playsInline = true; el.preload = 'metadata'; }
+    else el.alt = '';
     /* Presigned-ссылка живёт час (см. ExpiresIn в action_get_download_url) —
        если чат открыт дольше и кэш отдал протухшую ссылку, один раз
-       принудительно перезапрашиваем свежую, а не оставляем битую картинку. */
-    img.onerror = function () {
+       принудительно перезапрашиваем свежую, а не оставляем битую картинку/видео. */
+    el.onerror = function () {
       if (card.dataset.retried) return;
       card.dataset.retried = '1';
       delete attachUrlCache[card.dataset.attachPath];
-      card.innerHTML = ''; // иначе loadChatImages увидит тут же сломанный <img> и решит, что грузить нечего
+      card.innerHTML = ''; // иначе loadChatImages увидит тут же сломанный элемент и решит, что грузить нечего
       loadChatImages(card.parentElement || document);
     };
-    img.src = url;
-    card.appendChild(img);
+    el.src = url;
+    card.appendChild(el);
   }
 
   function closePlayer() {
@@ -984,6 +1044,33 @@
       ? '⚠️ На этом телефоне идентичность сбрасывали и выбрали заново: ' + p.name + '. Если это не ты — напиши в чат.'
       : '🔒 ' + p.name + ' закрепил(а) за собой это устройство.';
     chatAnnounce(id, text);
+  }
+
+  /* Своя модалка "Да/Нет" вместо встроенного confirm() — у нативного
+     диалога подписи кнопок задаёт ОС/браузер, через веб-API их не
+     переименовать. Возвращает Promise<boolean>, один диалог за раз
+     (overlay переиспользуется, предыдущие обработчики снимаются перед
+     новым открытием). */
+  function customConfirm(text, yesLabel, noLabel) {
+    return new Promise(function (resolve) {
+      var overlay = $('#confirmOverlay');
+      var yesBtn = $('#confirm-yes'), noBtn = $('#confirm-no');
+      $('#confirm-text').textContent = text;
+      yesBtn.textContent = yesLabel || 'Да';
+      noBtn.textContent = noLabel || 'Нет';
+
+      function cleanup(result) {
+        overlay.classList.remove('on');
+        yesBtn.removeEventListener('click', onYes);
+        noBtn.removeEventListener('click', onNo);
+        resolve(result);
+      }
+      function onYes() { cleanup(true); }
+      function onNo() { cleanup(false); }
+      yesBtn.addEventListener('click', onYes);
+      noBtn.addEventListener('click', onNo);
+      overlay.classList.add('on');
+    });
   }
 
   /* Модалка «Кто я» — всегда обязательная (без кнопки закрытия): пока
@@ -1096,6 +1183,28 @@
     return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
   }
 
+  /* Счётчик прочитавших — "N/4" или "+", если прочитали все. Только у
+     своих сообщений (по прямому запросу, как галочки раньше были только
+     у .bubble.out). Отправитель считается прочитавшим своё же
+     сообщение всегда, даже если его собственный курсор read_state ещё
+     формально не продвинулся дальше — иначе на только что отправленном
+     сообщении было бы видно "0/4", что вводит в заблуждение. Список
+     "кто именно" — та же арифметика, см. readersOf() и меню "Кто
+     прочитал" в openMessageMenu(). */
+  function readersOf(m) {
+    var readers = {};
+    Object.keys(chatReadState).forEach(function (pid) { if (chatReadState[pid] >= m.seq) readers[pid] = true; });
+    readers[m.participantId] = true;
+    return Object.keys(readers);
+  }
+  function renderReadCount(m) {
+    var total = (state.participants || []).length;
+    if (!total) return '';
+    var count = readersOf(m).length;
+    var label = count >= total ? '+' : (count + '/' + total);
+    return ' <span class="read-count">' + label + '</span>';
+  }
+
   function formatFileSize(bytes) {
     if (!bytes) return '';
     var kb = Math.round(bytes / 1024);
@@ -1116,6 +1225,20 @@
         : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + (m.pending ? ' · отправка…' : '') + '</div>';
       var imgInner = m.localPreview ? '<img src="' + m.localPreview + '" alt="">' : '<div class="chat-img-spinner">⏳</div>';
       return '<div class="chat-img-card" data-attach-path="' + esc(m.attachPath || '') + '">' + imgInner + '</div>' + imgCaption;
+    }
+    /* Видео, выбранное через скрепку ("Фото или видео" → любой файл с
+       video/*-mime) — раньше уходило тем же типом 'file', что и обычный
+       документ, и показывалось безликим файл-чипом вместо превью.
+       Рендерим как встроенный <video controls>, тем же ленивым
+       presigned-GET, что и у картинок (см. loadChatImages/setCardMedia). */
+    if (m.type === 'file' && m.attachMime && m.attachMime.indexOf('video/') === 0) {
+      var clipCaption = m.text
+        ? '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>'
+        : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + (m.pending ? ' · отправка…' : '') + '</div>';
+      var clipInner = m.localPreview
+        ? '<video src="' + m.localPreview + '" controls playsinline preload="metadata"></video>'
+        : '<div class="chat-img-spinner">⏳</div>';
+      return '<div class="chat-img-card chat-clip-card" data-kind="video" data-attach-path="' + esc(m.attachPath || '') + '">' + clipInner + '</div>' + clipCaption;
     }
     if (m.type === 'file') {
       var sizeStr = formatFileSize(m.attachSize) + (m.pending ? ' · отправка…' : '');
@@ -1164,6 +1287,7 @@
       var isGroupStart = i === 0 || !sameGroup(chatMessages[i - 1], m);
       var isGroupEnd = i === chatMessages.length - 1 || !sameGroup(m, chatMessages[i + 1]);
       var time = formatLocalTime(m.at);
+      if (mine && !m.pending && m.seq) time += renderReadCount(m);
 
       var avatarHtml = mine ? '' : (isGroupEnd
         ? '<div class="msg-avatar" style="background:' + participantColor(m.participantId) + '">' + participantInitial(m.participantId) + '</div>'
@@ -1257,7 +1381,10 @@
        тап открывает контент напрямую (плеер/просмотр/скачивание) вместо
        меню, а зажатие на них так же включает выбор, как и на любом
        другом месте пузыря. */
-    function isOwnControl(e) { return !!e.target.closest('.react-pill, .reply-quote'); }
+    /* <video> с native controls (клип из скрепки) сам разбирается с
+       тапами/скрабом по себе — не даём зажатию/тапу по строке
+       перехватывать нажатия на его собственные play/scrub/громкость. */
+    function isOwnControl(e) { return !!e.target.closest('.react-pill, .reply-quote, video'); }
     function attachTarget(e) { return e.target.closest('.chat-vid-card, .chat-img-card, .chat-file-card'); }
 
     row.addEventListener('pointerdown', function (e) {
@@ -1329,6 +1456,7 @@
         '<button data-act="reply">↩ Ответить</button>' +
         (canCopy ? '<button data-act="copy">📋 Копировать</button>' : '') +
         '<button data-act="select">☑️ Выбрать</button>' +
+        (mine && m.seq ? '<button data-act="readby">👁 Кто прочитал</button>' : '') +
         (mine ? '<button data-act="delete" class="danger">🗑 Удалить</button>' : '') +
       '</div>';
 
@@ -1368,9 +1496,27 @@
         if (act === 'reply') startReply(m.id);
         else if (act === 'copy') copyMessageText(m);
         else if (act === 'select') enterSelectMode(m.id);
+        else if (act === 'readby') openReadByPanel(m);
         else if (act === 'delete') confirmDeleteMessage(m);
       });
     });
+  }
+
+  /* "Кто прочитал" — по образцу Telegram Web. Та же арифметика, что и
+     у счётчика "N/4" в самой ленте (readersOf), просто вместо числа —
+     список всех участников с отметкой. */
+  function openReadByPanel(m) {
+    var readers = readersOf(m);
+    var rows = (state.participants || []).map(function (p) {
+      var read = readers.indexOf(p.id) !== -1;
+      return '<div class="readby-row' + (read ? '' : ' unread') + '">' +
+               '<span class="readby-avatar" style="background:' + participantColor(p.id) + '">' + participantInitial(p.id) + '</span>' +
+               '<span class="readby-name">' + esc(p.name) + '</span>' +
+               '<span class="readby-status">' + (read ? '✓ прочитано' : 'не видел(а)') + '</span>' +
+             '</div>';
+    }).join('');
+    $('#readby-list').innerHTML = rows || '<p class="h" style="padding:12px 16px">Участников пока нет.</p>';
+    $('#readByOverlay').classList.add('on');
   }
 
   function copyMessageText(m) {
@@ -1532,10 +1678,21 @@
         return !chatMessages.some(function (x) { return x.id === m.id; }) && m.participantId !== myId;
       });
       var changed = chatMerge(items, fullPoll);
-      if (changed) {
+
+      /* Курсоры прочитанного — по всем 4 участникам едут вместе с
+         сообщениями, отдельного запроса не нужно (см. Storage.chat.fetch).
+         Меняются независимо от того, появились ли новые сообщения —
+         кто-то мог просто открыть чат и продвинуть свой курсор — так что
+         перерисовываем, если счётчики реально изменились, даже без
+         новых сообщений. */
+      var newReadState = (r && r.readState) || {};
+      var readChanged = JSON.stringify(newReadState) !== JSON.stringify(chatReadState);
+      if (readChanged) chatReadState = newReadState;
+
+      if (changed || readChanged) {
         var onChatTab = document.getElementById('v-chat').classList.contains('on');
         if (onChatTab && !document.hidden) {
-          markChatRead();
+          if (changed) markChatRead();
           renderChat();
         } else if (newFromOthers.length) {
           bumpChatUnread(newFromOthers.length);
@@ -1685,6 +1842,10 @@
     if (dot) { dot.hidden = true; dot.textContent = ''; }
     setAppBadge(0);
     try { localStorage.setItem(LS_LAST_READ, chatMessages.length ? chatMessages[chatMessages.length - 1].id : ''); } catch (e) {}
+    /* Best-effort — счётчик "N/4" у остальных чуть задержится, если это
+       не удалось, ничего страшного не произошло, поэтому без alert'ов. */
+    var myIdVal = myId();
+    if (myIdVal) Storage.chat.markRead(myIdVal).catch(function () {});
   }
 
   function notifyNewMessages(items) {
@@ -1846,7 +2007,14 @@
     }
     var tempId = 'tmp-' + Date.now();
     var replyToId = replyingTo ? replyingTo.id : null;
-    var localPreview = (type === 'image' && window.URL) ? URL.createObjectURL(file) : null;
+    /* Локальное превью сразу, без ожидания загрузки/presigned-ссылки —
+       раньше делали только для картинок, но видео из скрепки тоже
+       получает inline-плеер (см. renderMessageBody), значит и ему
+       нужен localPreview, иначе у самого отправителя первые секунды
+       будет просто крутилка вместо уже готового на этом же телефоне
+       файла. */
+    var isVideoAttach = type === 'file' && file.type && file.type.indexOf('video/') === 0;
+    var localPreview = (window.URL && (type === 'image' || isVideoAttach)) ? URL.createObjectURL(file) : null;
     var optimistic = {
       id: tempId, participantId: myIdVal, text: '', type: type, at: new Date().toISOString(), pending: true,
       replyTo: replyToId, attachName: file.name, attachSize: file.size, attachMime: file.type, localPreview: localPreview
@@ -2014,9 +2182,16 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v50', items: [
-      'Загруженное видео снова уходит карточкой в общий чат (от лица того, кто загрузил) — остальные получают push и могут реагировать/обсуждать',
-      'Push-уведомления — короче и без дублирования названия приложения'
+    { v: 'v51', items: [
+      'Норма показывает реальную сумму повторений из видео (X/N), а не только норму',
+      'Норму/статус можно снова выключить себе назад, если поставили по ошибке',
+      'Видео из галереи (не со съёмки в приложении) теперь превью, а не файл-чип',
+      'Подтверждение превышения нормы — кнопки «Да» / «Нет» вместо ОК/Отмена',
+      'Чат: счётчик прочитавших (0/4…+) вместо галочек, с кнопкой «Кто прочитал» в меню своего сообщения',
+      'Чат всегда открывается внизу, новые сообщения не прячутся под полем ввода',
+      'Значок приложения учитывает и новые видео, не только текстовые сообщения',
+      'Смена нормы/альт/форс/пропуск теперь тоже приходит сообщением в чат',
+      'Главный экран: имена по алфавиту, видео каждого — сразу под его карточкой, кнопки статусов ниже'
     ] }
   ];
 
@@ -2139,16 +2314,23 @@
      scrollHeight/scrollTop ещё не отражают реальную раскладку. Двойной
      rAF — layout успевает посчитаться перед тем, как прокручиваем. */
   function scrollChatToBottom() {
+    /* У #chat-log нет своего overflow — как и везде в приложении,
+       скроллится вся страница целиком (body), не отдельный div. Раньше
+       здесь стояло log.scrollTop = log.scrollHeight — это no-op на
+       нескроллящемся элементе, поэтому прокрутка вниз не срабатывала
+       вообще. */
+    function toBottom() { window.scrollTo(0, document.body.scrollHeight); }
     requestAnimationFrame(function () {
-      requestAnimationFrame(function () {
-        /* У #chat-log нет своего overflow — как и везде в приложении,
-           скроллится вся страница целиком (body), не отдельный div.
-           Раньше здесь стояло log.scrollTop = log.scrollHeight — это
-           no-op на нескроллящемся элементе, поэтому прокрутка вниз не
-           срабатывала вообще. */
-        window.scrollTo(0, document.body.scrollHeight);
-      });
+      requestAnimationFrame(toBottom);
     });
+    /* Двойного rAF иногда не хватает — если в новых сообщениях есть
+       аватары/превью, их размеры (а значит и итоговая высота ленты)
+       могут доуточниться уже ПОСЛЕ кадра отрисовки (декодирование
+       картинки, довычисление шрифта). Без этого запасного прохода
+       именно на "чат с новыми сообщениями" низ иногда оказывался под
+       полем ввода — сама прокрутка происходила чуть раньше, чем
+       страница окончательно "устаканивалась" по высоте. */
+    setTimeout(toBottom, 250);
   }
 
   /* Кнопка "вниз" (как в Telegram) — всплывает, когда пролистал ленту
@@ -2237,6 +2419,8 @@
     $('#chat-select-cancel').addEventListener('click', exitSelectMode);
     $('#chat-select-copy').addEventListener('click', copySelectedMessages);
     $('#chat-select-delete').addEventListener('click', deleteSelectedMessages);
+
+    $('#readby-close').addEventListener('click', function () { $('#readByOverlay').classList.remove('on'); });
 
     /* Скрепка — тот же паттерн, что и меню сообщения: тап открывает
        маленькое всплывающее меню с двумя пунктами (по референсу

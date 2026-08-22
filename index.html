@@ -20,7 +20,7 @@
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v50 · 22.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v51 · 22.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -51,6 +51,31 @@
   </div>
 </div>
 
+<!-- Своя модалка подтверждения — у встроенного confirm() кнопки
+     "OK/Отмена" рисует сама ОС, подписать их "Да/Нет" через веб-API
+     нельзя, только полной заменой на свой диалог. См. customConfirm() в app.js. -->
+<div class="rec-overlay" id="confirmOverlay">
+  <div class="rec-box" style="max-width:340px">
+    <div class="rec-head"><span id="confirm-title">Подтверждение</span></div>
+    <div style="padding:6px 16px 20px">
+      <p class="h" id="confirm-text" style="margin:0 0 18px;color:#9FB0BE"></p>
+      <div style="display:flex;gap:10px">
+        <button class="btn ghost" id="confirm-no" style="flex:1">Нет</button>
+        <button class="btn" id="confirm-yes" style="flex:1">Да</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- "Кто прочитал" — по образцу Telegram Web, из меню действий на своём
+     сообщении. Список всех участников с отметкой, прочитал/нет. -->
+<div class="rec-overlay" id="readByOverlay">
+  <div class="rec-box" style="max-width:340px">
+    <div class="rec-head"><span>Прочитано</span><button id="readby-close" class="close-safe" aria-label="Закрыть">✕</button></div>
+    <div id="readby-list" class="readby-list"></div>
+  </div>
+</div>
+
 <main class="wrap">
 
   <!-- ================= СЕГОДНЯ ================= -->
@@ -68,7 +93,6 @@
     </div>
     <div id="today-cards"></div>
     <div id="today-banner"></div>
-    <h2 style="margin-top:20px">Видео дня</h2>
     <div id="today-videos"></div>
   </section>
 
