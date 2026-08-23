@@ -358,10 +358,30 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
    см. syncHeaderHeightVar()) до самого низа экрана. Прокрутка внутри
    него — el.scrollTop = el.scrollHeight — детерминирована и не зависит
    от того, что творится с остальной страницей. */
-.view.on#v-chat{position:fixed;left:50%;transform:translateX(-50%);
-  width:100%;max-width:640px;top:var(--header-h);bottom:0;
-  display:flex;flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;
-  background:var(--chat-bg);padding:10px 12px calc(90px + var(--safe-b));color:var(--chat-text);z-index:5;}
+/* ВАЖНО: тут НЕЛЬЗЯ ни position:fixed, ни transform. Любой transform
+   (и fixed-предок) делает элемент containing block'ом для СВОИХ
+   position:fixed потомков — а внутри чата их полно: сам композер,
+   кнопка "вниз", панель ответа, меню скрепки/эмодзи/упоминаний. С
+   transform:translateX(-50%) для центрирования они переставали
+   отсчитываться от экрана и уезжали на дно прокручиваемого контента
+   (~2600px вниз) — поле ввода просто пропадало с экрана.
+
+   Поэтому контейнер остаётся в обычном потоке, а нужную высоту
+   получает явно: 100dvh минус реальная высота закреплённой шапки
+   (--header-h меряется в JS, см. syncHeaderHeightVar()). dvh, а не vh —
+   на мобильных vh считается по максимальной высоте окна и не учитывает
+   схлопывающуюся адресную строку. Отрицательный margin-top гасит
+   padding-top у .wrap, чтобы чат начинался ровно под шапкой. */
+.view.on#v-chat{display:flex;flex-direction:column;
+  margin:-16px -12px 0;
+  height:calc(100vh - var(--header-h));
+  height:calc(100dvh - var(--header-h));
+  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  background:var(--chat-bg);padding:10px 12px calc(90px + var(--safe-b));color:var(--chat-text);}
+/* Пока открыт чат, страница целиком не скроллится — скроллится только
+   сам #v-chat. Иначе под ним оставалась "губа" из фона body, которую
+   можно было утянуть вниз. */
+body.chat-open{overflow:hidden;}
 /* #chat-wrap раньше был обычным блочным div между #v-chat (flex) и
    .chat-log (flex) — вставленным между двумя флекс-уровнями блочным
    элементом, который НЕ передаёт flex дальше. Из-за этого .chat-log{flex:1}
