@@ -343,67 +343,46 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   --chat-bg:#121316; --chat-surface:#1b1d22; --chat-surface2:#22252b; --chat-border:#2c2f36;
   --chat-primary:#8774E1; --chat-mine:#6C5DD3; --chat-text:#e8eaed; --chat-muted:#9aa0a8;
 }
-/* Раньше #v-chat скроллился вместе со всей страницей (window), а "низ"
-   ловили вычислением document.body.scrollHeight — это требовало точно
-   знать итоговую высоту документа В МОМЕНТ прокрутки, а она "гуляла":
-   min-height у #v-chat был подобран под старую шапку без верхней
-   навигации, после её добавления число разошлось с реальной высотой
-   шапки, и последний пузырь оказывался неизвестно где, а не у низа.
-   Плюс любая асинхронная картинка/видео в сообщении, догрузившись
-   позже кадра прокрутки, дополнительно съезжала итоговую высоту.
+/* Геометрия чата. Три правила, которые тут нельзя нарушать:
 
-   Теперь #v-chat — сам себе скроллящийся контейнер с ЗАДАННОЙ высотой
-   (position:fixed, top/bottom считаются от реальных величин, не от
-   догадки): от низа закреплённой шапки (--header-h, меряется в JS,
-   см. syncHeaderHeightVar()) до самого низа экрана. Прокрутка внутри
-   него — el.scrollTop = el.scrollHeight — детерминирована и не зависит
-   от того, что творится с остальной страницей. */
-/* ВАЖНО: тут НЕЛЬЗЯ ни position:fixed, ни transform. Любой transform
-   (и fixed-предок) делает элемент containing block'ом для СВОИХ
-   position:fixed потомков — а внутри чата их полно: сам композер,
-   кнопка "вниз", панель ответа, меню скрепки/эмодзи/упоминаний. С
-   transform:translateX(-50%) для центрирования они переставали
-   отсчитываться от экрана и уезжали на дно прокручиваемого контента
-   (~2600px вниз) — поле ввода просто пропадало с экрана.
+   1. Никакого position:fixed и никакого transform на контейнерах чата.
+      Любой transform (и fixed-предок) становится containing block'ом
+      для СВОИХ position:fixed потомков. Именно на этом чат ломался:
+      контейнер центрировался через translateX(-50%), и поле ввода
+      вместе с меню переставало отсчитываться от экрана — уезжало на
+      дно прокручиваемого контента, с экрана пропадало совсем.
 
-   Поэтому контейнер остаётся в обычном потоке, а нужную высоту
-   получает явно: 100dvh минус реальная высота закреплённой шапки
-   (--header-h меряется в JS, см. syncHeaderHeightVar()). dvh, а не vh —
-   на мобильных vh считается по максимальной высоте окна и не учитывает
-   схлопывающуюся адресную строку. Отрицательный margin-top гасит
-   padding-top у .wrap, чтобы чат начинался ровно под шапкой. */
+   2. Скроллится ровно ОДИН элемент — .chat-log. Ни страница целиком,
+      ни #v-chat. Тогда "прокрутить в самый низ" — это буквально
+      log.scrollTop = log.scrollHeight, без вычислений высоты документа,
+      которые вечно расходились с реальностью.
+
+   3. Поле ввода — не наложенный сверху fixed-слой, а нижняя строка
+      flex-колонки (.chat-bottom). Поэтому под него не нужно резервировать
+      padding "на глаз": он физически занимает своё место, и последнее
+      сообщение не может под него заехать в принципе. */
 .view.on#v-chat{display:flex;flex-direction:column;
   margin:-16px -12px 0;
   height:calc(100vh - var(--header-h));
   height:calc(100dvh - var(--header-h));
-  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
-  background:var(--chat-bg);padding:10px 12px calc(90px + var(--safe-b));color:var(--chat-text);}
-/* Пока открыт чат, страница целиком не скроллится — скроллится только
-   сам #v-chat. Иначе под ним оставалась "губа" из фона body, которую
-   можно было утянуть вниз. */
+  overflow:hidden;
+  background:var(--chat-bg);padding:0;color:var(--chat-text);}
+/* Пока открыт чат, страница целиком не скроллится — иначе под чатом
+   оставалась "губа" из фона body, которую можно было оттянуть. */
 body.chat-open{overflow:hidden;}
-/* #chat-wrap раньше был обычным блочным div между #v-chat (flex) и
-   .chat-log (flex) — вставленным между двумя флекс-уровнями блочным
-   элементом, который НЕ передаёт flex дальше. Из-за этого .chat-log{flex:1}
-   был no-op (flex действует только когда сам элемент — flex-item, то
-   есть когда его РОДИТЕЛЬ display:flex), а .chat-log получал высоту
-   исключительно по своему контенту — вот откуда "пузырь висит
-   где-то посередине": лента вообще не дотягивалась до низа контейнера,
-   scrollTop/scrollHeight тут ни при чём. Делаем #chat-wrap тоже
-   flex-колонкой, чтобы flex:1 у .chat-log наконец сработал по цепочке. */
-/* Без min-height:0 нарочно: #chat-wrap не сам скроллится (скроллится
-   #v-chat снаружи), поэтому ему, наоборот, НУЖНО расти по контенту —
-   с min-height:0 контейнер отчитывался бы заниженной высотой (по
-   flex-доле, а не по реальному контенту), и переполняющая его лента
-   заезжала бы поверх padding-bottom у #v-chat, "съедая" зарезервированный
-   отступ под композер вместо того, чтобы честно добавлять его после
-   себя — низ последнего сообщения при долгой ленте оказывался вровень
-   с самым краем экрана, а не над полем ввода. */
-#chat-wrap{flex:1;display:flex;flex-direction:column;}
-/* justify-content:flex-end — когда сообщений мало и они не заполняют
-   весь контейнер, последний пузырь должен стоять прямо над полем
-   ввода, а не прилипать к верху с пустотой под собой до композера. */
-.chat-log{flex:1;display:flex;flex-direction:column;justify-content:flex-end;}
+#chat-wrap{flex:1;display:flex;flex-direction:column;min-height:0;}
+/* Единственный скроллер чата. min-height:0 обязателен: без него
+   flex-элемент не даёт себя сжать меньше контента и overflow не
+   включается. */
+.chat-log{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;display:flex;flex-direction:column;padding:10px 12px;}
+/* Когда сообщений мало, они должны стоять внизу, у поля ввода, а не
+   висеть вверху. justify-content:flex-end для этого не годится — при
+   переполнении он обрезает верх ленты и до старых сообщений не
+   долистать. Псевдоэлемент с margin-top:auto делает то же самое
+   безопасно: при коротком списке он забирает свободное место, при
+   длинном схлопывается в ноль. */
+.chat-log::before{content:'';margin-top:auto;}
 
 .chat-day{align-self:center;font-size:11.5px;font-weight:600;color:var(--chat-muted);
   background:rgba(127,127,127,.22);padding:4px 12px;margin:10px 0 6px;border-radius:12px;}
@@ -491,28 +470,26 @@ body.chat-open{overflow:hidden;}
   text-transform:uppercase;letter-spacing:.04em;}
 
 /* ---------- панель ответа над полем ввода ---------- */
-.reply-bar{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;z-index:56;display:flex;align-items:center;gap:8px;background:var(--chat-surface2);
-  border:1px solid var(--chat-border);border-bottom:0;padding:7px 12px;font-size:12.5px;
-  color:var(--chat-text);border-radius:10px 10px 0 0;}
+/* В потоке, прямо над полем ввода — не наложением поверх экрана. */
+.reply-bar{display:flex;align-items:center;gap:8px;background:var(--chat-surface2);
+  border-top:1px solid var(--chat-border);padding:7px 12px;font-size:12.5px;
+  color:var(--chat-text);}
 .reply-bar-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .reply-bar-txt b{display:block;font-size:11px;font-weight:600;color:var(--chat-primary);}
 .reply-bar button{background:transparent;border:0;color:var(--chat-muted);font-size:15px;padding:2px 4px;}
 
-/* position:fixed вместо sticky — намеренно. Sticky на iOS Safari
-   считает позицию по "раскладочному" вьюпорту, а открытие клавиатуры
-   меняет "визуальный" — раскладочный при этом не всегда пересчитывается
-   синхронно, и sticky-элемент визуально "убегает" в случайное место,
-   пока это рассинхронизировано. Fixed + ручной пересчёт bottom через
-   window.visualViewport (см. initChatKeyboardOffset() в app.js) —
-   единственный по-настоящему надёжный способ на iOS. */
-.chat-input{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;bottom:var(--safe-b);z-index:55;display:flex;align-items:center;gap:8px;
+/* Нижняя строка flex-колонки чата. Никакого fixed: место под себя
+   занимает физически, поэтому сообщения под него заехать не могут.
+   .chat-bottom — общий контейнер низа, он же точка отсчёта (relative)
+   для всплывающих меню, которые садятся на bottom:100% (прямо над ним). */
+.chat-bottom{position:relative;flex-shrink:0;background:var(--chat-bg);
+  padding-bottom:var(--safe-b);}
+.chat-input{display:flex;align-items:center;gap:8px;
   background:var(--chat-bg);padding:8px 12px 10px;}
 
 /* ---------- кнопка "вниз" (как в Telegram) — когда пролистал вверх ---------- */
-.scroll-bottom-btn{position:fixed;right:max(12px, calc(50% - 308px));
-  bottom:calc(78px + var(--safe-b));z-index:54;width:40px;height:40px;border-radius:50%;
+.scroll-bottom-btn{position:absolute;right:12px;bottom:100%;margin-bottom:10px;
+  z-index:54;width:40px;height:40px;border-radius:50%;
   background:var(--chat-surface);border:1px solid var(--chat-border);color:var(--chat-text);
   font-size:17px;display:flex;align-items:center;justify-content:center;
   box-shadow:0 4px 14px rgba(0,0,0,.35);}
@@ -541,8 +518,8 @@ body.chat-open{overflow:hidden;}
 .chat-icon-btn:active{background:rgba(255,255,255,.08);}
 
 /* ---------- панель эмодзи над полем ввода ---------- */
-.emoji-picker{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;bottom:calc(60px + var(--safe-b));z-index:56;background:var(--chat-surface);
+.emoji-picker{position:absolute;left:8px;right:8px;bottom:100%;margin-bottom:6px;
+  box-sizing:border-box;z-index:56;background:var(--chat-surface);
   border:1px solid var(--chat-border);border-radius:12px;padding:8px;
   box-shadow:0 -4px 20px rgba(0,0,0,.35);max-height:240px;overflow-y:auto;
   display:grid;grid-template-columns:repeat(8,1fr);gap:2px;}
@@ -551,8 +528,7 @@ body.chat-open{overflow:hidden;}
 .emoji-picker button:active{background:var(--chat-surface2);}
 
 /* ---------- панель множественного выбора (заменяет композер) ---------- */
-.select-bar{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;bottom:var(--safe-b);z-index:55;display:flex;align-items:center;
+.select-bar{display:flex;align-items:center;
   gap:10px;background:var(--chat-bg);padding:8px 14px 10px;color:var(--chat-text);}
 .select-bar button{background:transparent;border:0;color:var(--chat-text);font-size:18px;padding:4px 6px;}
 .select-bar button:disabled{opacity:.35;}
@@ -565,8 +541,8 @@ body.chat-open{overflow:hidden;}
 .bubble.out .mention{color:#fff;text-decoration:underline;text-decoration-color:rgba(255,255,255,.5);}
 
 /* ---------- автодополнение @упоминаний над полем ввода ---------- */
-.mention-menu{position:fixed;left:50%;transform:translateX(-50%);width:100%;max-width:640px;
-  box-sizing:border-box;bottom:calc(60px + var(--safe-b));z-index:56;background:var(--chat-surface);
+.mention-menu{position:absolute;left:8px;right:8px;bottom:100%;margin-bottom:6px;
+  box-sizing:border-box;z-index:56;background:var(--chat-surface);
   border:1px solid var(--chat-border);border-radius:12px;padding:6px;
   box-shadow:0 -4px 20px rgba(0,0,0,.35);max-height:200px;overflow-y:auto;}
 .mention-menu button{display:flex;align-items:center;gap:10px;width:100%;background:transparent;
@@ -576,7 +552,7 @@ body.chat-open{overflow:hidden;}
   justify-content:center;color:#fff;font-weight:700;font-size:11px;flex-shrink:0;}
 
 /* ---------- скрепка: маленькое меню "Фото или видео / Файл" ---------- */
-.attach-menu{position:fixed;left:16px;bottom:calc(60px + var(--safe-b));z-index:56;
+.attach-menu{position:absolute;left:12px;bottom:100%;margin-bottom:6px;z-index:56;
   background:var(--chat-surface);border:1px solid var(--chat-border);border-radius:12px;
   padding:6px;display:flex;flex-direction:column;box-shadow:0 8px 24px rgba(0,0,0,.4);min-width:190px;}
 .attach-menu button{display:flex;align-items:center;gap:10px;background:transparent;border:0;

@@ -8,14 +8,17 @@
    вообще нет. */
 
 var CACHE = 'pcsport-v54';
+/* С ?v= — теми же адресами, какими их запрашивает index.html (см.
+   комментарий там). Без совпадения адресов офлайн-кэш просто не нашёлся
+   бы по запрошенному URL. */
 var SHELL = [
   './',
   'index.html',
-  'styles.css',
-  'app.js',
-  'storage.js',
-  'video.js',
-  'log.js',
+  'styles.css?v=54',
+  'app.js?v=54',
+  'storage.js?v=54',
+  'video.js?v=54',
+  'log.js?v=54',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

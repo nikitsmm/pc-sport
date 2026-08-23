@@ -1344,8 +1344,8 @@
     closeMessageMenu(); // список может пересобраться под открытым меню — не оставляем меню "повисшим"
 
     var log = $('#chat-log');
-    /* #v-chat — сам скроллящийся контейнер (см. scrollChatToBottom). */
-    var chatElForBottom = document.getElementById('v-chat');
+    /* .chat-log — единственный скроллер чата (см. scrollChatToBottom). */
+    var chatElForBottom = document.getElementById('chat-log');
     var wasAtBottom = chatElForBottom
       ? (chatElForBottom.scrollHeight - chatElForBottom.scrollTop - chatElForBottom.clientHeight) < 80
       : true;
@@ -1506,7 +1506,7 @@
     messageMenuEls = null;
     window.removeEventListener('scroll', closeMessageMenu);
     window.removeEventListener('resize', closeMessageMenu);
-    var chatEl = document.getElementById('v-chat');
+    var chatEl = document.getElementById('chat-log');
     if (chatEl) chatEl.removeEventListener('scroll', closeMessageMenu);
   }
 
@@ -1551,7 +1551,7 @@
     backdrop.addEventListener('click', closeMessageMenu);
     window.addEventListener('scroll', closeMessageMenu, { passive: true });
     window.addEventListener('resize', closeMessageMenu);
-    var chatElForMenu = document.getElementById('v-chat');
+    var chatElForMenu = document.getElementById('chat-log');
     if (chatElForMenu) chatElForMenu.addEventListener('scroll', closeMessageMenu, { passive: true });
 
     panel.querySelectorAll('.quick-react').forEach(function (b) {
@@ -2153,7 +2153,7 @@
     bar.hidden = false;
     bar.innerHTML = '<div class="reply-bar-txt"><b>' + esc(name) + '</b><br>' + esc(preview) + '</div><button id="chat-reply-cancel">✕</button>';
     $('#chat-reply-cancel').addEventListener('click', clearReply);
-    repositionChatBars();
+    syncChatHeight();
   }
 
   /* Автосообщения о видео — от лица того, кто грузит, не от «бота»:
@@ -2271,11 +2271,13 @@
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
     { v: 'v54', items: [
-      'Чат наконец прижимается к низу по-настоящему: лента теперь свой скроллящийся блок с реальной высотой, а не подгонка прокрутки всей страницы',
-      'Поле ввода на месте и «губы» под чатом больше нет — пока чат открыт, скроллится только он сам',
-      'Реакция на сообщение и счётчик прочитавших больше не перерисовывают весь чат целиком — только то, что реально изменилось, без «дёрганья» ленты',
-      'Видео других участников видно на главной без ручного обновления — счёт повторений обновляется сам',
-      'Убран зазор между карточкой участника и его видео на главной — теперь это один блок'
+      'Поле ввода в чате больше не может пропасть: оно теперь обычная нижняя строка экрана чата, а не «плавающий» слой поверх — именно плавающий слой уезжал за пределы экрана на айфоне',
+      'Чат честно прижимается к низу: прокручивается только сама лента сообщений, а не страница целиком',
+      'Меню скрепки, эмодзи и упоминаний всегда открываются ровно над полем ввода',
+      'Обновления приложения теперь гарантированно доезжают — раньше телефон мог показывать новую версию со старыми стилями',
+      'Реакция и счётчик прочитавших больше не перерисовывают весь чат — лента не дёргается',
+      'Видео других участников видно на главной без ручного обновления',
+      'Убран зазор между карточкой участника и его видео на главной'
     ] }
   ];
 
@@ -2380,11 +2382,11 @@
     if (view === 'chat') {
       chatStickToBottom = true; // открытие — всегда считаем, что едем в самый низ
       syncHeaderHeightVar();
+      syncChatHeight(); // высота колонки — до того, как считать "низ" ленты
       prepareUnreadSnapshot();
       markChatRead();
       renderChat();
       scrollChatToBottom();
-      repositionChatBars();
       updateScrollBottomBtn();
     } else {
       var scrollBtn = $('#scroll-bottom-btn');
@@ -2411,7 +2413,7 @@
        не лишний: сама разметка (layout) под только что вставленный
        innerHTML применяется не мгновенно в момент присваивания, а к
        следующему кадру отрисовки. */
-    var el = document.getElementById('v-chat');
+    var el = document.getElementById('chat-log');
     if (!el) return;
     function toBottom() { el.scrollTop = el.scrollHeight; }
     requestAnimationFrame(function () {
@@ -2430,47 +2432,45 @@
   var SCROLL_BOTTOM_THRESHOLD = 200;
   function updateScrollBottomBtn() {
     var btn = document.getElementById('scroll-bottom-btn');
-    var el = document.getElementById('v-chat');
+    var el = document.getElementById('chat-log');
     if (!btn || !el) return;
-    if (!el.classList.contains('on')) { btn.hidden = true; return; }
+    if (!document.getElementById('v-chat').classList.contains('on')) { btn.hidden = true; return; }
     var distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     btn.hidden = distance < SCROLL_BOTTOM_THRESHOLD;
     chatStickToBottom = distance < SCROLL_BOTTOM_THRESHOLD;
   }
 
-  /* Держит композер (и панель ответа над ним) прижатыми к клавиатуре
-     на iOS — position:fixed сам по себе этого не гарантирует, когда
-     клавиатура открыта, нужно вручную пересчитывать отступ снизу по
-     window.visualViewport (см. пояснение в styles.css у .chat-input).
-     Без visualViewport (старые браузеры) — просто ничего не делаем,
-     остаётся дефолтный CSS-отступ под нижнюю панель. */
-  var NAV_CLEARANCE_PX = 0; // должно совпадать с базовым bottom в CSS у .chat-input (var(--safe-b), без нижней панели вкладок)
+  /* Поле ввода больше НИЧЕМ не двигается вручную — оно просто нижняя
+     строка flex-колонки чата (см. .chat-bottom в styles.css). Осталась
+     одна задача: задать колонке высоту ровно до низа ВИДИМОЙ области.
 
-  function repositionChatBars() {
-    var composer = document.querySelector('.chat-input');
-    if (!composer) return;
-    var replyBar = document.getElementById('chat-reply-bar');
-    var kb = 0;
-    if (window.visualViewport) {
-      kb = Math.max(0, window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop);
-    }
-    var safeB = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-b')) || 0;
-    var bottom = kb > 40 ? (kb + 4) : (NAV_CLEARANCE_PX + safeB);
-    composer.style.bottom = bottom + 'px';
-    if (replyBar && !replyBar.hidden) {
-      replyBar.style.bottom = (bottom + composer.getBoundingClientRect().height) + 'px';
-    }
+     Считаем от собственного getBoundingClientRect().top самого чата, а
+     не от измеренной высоты шапки — так значение самокорректирующееся:
+     подхватывает любую реальную высоту шапки (она меняется, когда
+     догружаются шрифты) без отдельного замера, который может протухнуть.
+
+     visualViewport.height вместо innerHeight — потому что на iOS
+     клавиатура перекрывает низ экрана, не меняя раскладочный вьюпорт.
+     Ужимаем колонку — и поле ввода само встаёт над клавиатурой, без
+     единого подобранного вручную отступа. */
+  function syncChatHeight() {
     var chatEl = document.getElementById('v-chat');
-    if (kb > 40 && chatEl && chatEl.classList.contains('on')) {
-      chatEl.scrollTop = chatEl.scrollHeight;
+    if (!chatEl || !chatEl.classList.contains('on')) return;
+    var top = chatEl.getBoundingClientRect().top;
+    var vh = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    var h = Math.max(200, Math.round(vh - top));
+    if (chatEl.style.height !== h + 'px') chatEl.style.height = h + 'px';
+    if (chatStickToBottom) {
+      var log = document.getElementById('chat-log');
+      if (log) log.scrollTop = log.scrollHeight;
     }
   }
 
   function initChatKeyboardOffset() {
     if (!window.visualViewport) return;
-    window.visualViewport.addEventListener('resize', repositionChatBars);
-    window.visualViewport.addEventListener('scroll', repositionChatBars);
-    repositionChatBars();
+    window.visualViewport.addEventListener('resize', syncChatHeight);
+    window.visualViewport.addEventListener('scroll', syncChatHeight);
+    syncChatHeight();
   }
 
   function bind() {
@@ -2478,7 +2478,7 @@
       b.addEventListener('click', function () { show(b.dataset.view); });
     });
 
-    $('#v-chat').addEventListener('scroll', updateScrollBottomBtn, { passive: true });
+    $('#chat-log').addEventListener('scroll', updateScrollBottomBtn, { passive: true });
     $('#scroll-bottom-btn').addEventListener('click', function () {
       scrollChatToBottom();
       markChatRead();

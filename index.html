@@ -14,7 +14,11 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<!-- ?v= — принудительный сброс кэша при каждом релизе. Без него
+     браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
+     к уже обновившемуся index.html: получалась смесь старой и новой
+     версии, и правки "не доезжали". Меняется вместе с номером версии. -->
+<link rel="stylesheet" href="styles.css?v=54">
 </head>
 <body>
 
@@ -122,8 +126,17 @@
       <div class="who-grid" id="chat-who-pick"></div>
     </div>
 
+    <!-- Низ чата (поле ввода, панель ответа/выбора, меню) — ОДИН блок в
+         обычном потоке, последним элементом flex-колонки. Раньше каждый
+         из них был position:fixed со своим magic-number отступом снизу;
+         на iOS это разъезжалось (а из-за transform у контейнера — вообще
+         уезжало за экран). Теперь ничего не позиционируется от экрана:
+         поле ввода просто нижняя строка колонки, а всплывающие меню —
+         absolute относительно этого же блока (bottom:100%, то есть
+         "прямо над ним"), без единого подобранного вручную числа. -->
     <div id="chat-wrap" hidden>
       <div class="chat-log" id="chat-log"></div>
+      <div class="chat-bottom" id="chat-bottom">
       <button class="scroll-bottom-btn" id="scroll-bottom-btn" hidden aria-label="Вниз">↓</button>
       <div class="reply-bar" id="chat-reply-bar" hidden></div>
       <div class="select-bar" id="chat-select-bar" hidden>
@@ -152,6 +165,7 @@
         </div>
         <button class="btn" id="chat-send" type="submit">➤</button>
       </form>
+      </div>
     </div>
   </section>
 
@@ -353,9 +367,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js"></script>
-<script src="video.js"></script>
-<script src="storage.js"></script>
-<script src="app.js"></script>
+<script src="log.js?v=54"></script>
+<script src="video.js?v=54"></script>
+<script src="storage.js?v=54"></script>
+<script src="app.js?v=54"></script>
 </body>
 </html>
