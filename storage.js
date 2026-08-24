@@ -467,6 +467,18 @@
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
         return apiRetry(cfg.url, 'delete_video', { path: path, videoId: videoId }, 3);
+      },
+
+      /* Дописать повторения к уже залитому ролику — только если их ещё
+         не указывали (бэкенд отклонит попытку переписать уже
+         проставленное число, см. action_update_video_reps). Сценарий
+         ровно один: снял, отправил, число указать забыл. */
+      updateReps: async function (participantId, videoId, reps) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        return apiRetry(cfg.url, 'update_video_reps', {
+          participantId: participantId, videoId: videoId, reps: reps
+        }, 3);
       }
     },
 

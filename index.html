@@ -24,7 +24,7 @@
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v54 · 23.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v55 · 24.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -39,6 +39,7 @@
   <div class="topnav-home-actions" id="topnav-home-actions">
     <button class="topnav-journal" data-view="log"><span class="g">▤</span>Журнал</button>
     <button class="topnav-chat" data-view="chat">💬 Чат<span class="chat-dot" id="chat-dot" hidden></span></button>
+    <button class="topnav-bell" id="bell-btn" title="Уведомления" aria-label="Уведомления">🔔</button>
     <button class="topnav-settings" data-view="cfg" title="Настройки" aria-label="Настройки">⚙</button>
   </div>
 </div>
@@ -58,6 +59,22 @@
 <!-- Своя модалка подтверждения — у встроенного confirm() кнопки
      "OK/Отмена" рисует сама ОС, подписать их "Да/Нет" через веб-API
      нельзя, только полной заменой на свой диалог. См. customConfirm() в app.js. -->
+<div class="rec-overlay" id="repsOverlay">
+  <div class="rec-box" style="max-width:340px">
+    <div class="rec-head"><span>Сколько повторений?</span></div>
+    <div style="padding:6px 16px 20px">
+      <p class="h" style="margin:0 0 12px;color:#9FB0BE">Число указывается один раз и потом не меняется.</p>
+      <input type="number" id="reps-input" min="1" max="9999" inputmode="numeric" placeholder="например, 20"
+             style="width:100%;padding:12px;border:1px solid #33485C;background:#1E2A36;color:#fff;font-size:16px;border-radius:8px;margin-bottom:10px">
+      <div class="status-line" id="reps-msg" style="margin-bottom:12px"></div>
+      <div style="display:flex;gap:10px">
+        <button class="btn ghost" id="reps-cancel" style="flex:1">Отмена</button>
+        <button class="btn" id="reps-ok" style="flex:1">ОК</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="rec-overlay" id="confirmOverlay">
   <div class="rec-box" style="max-width:340px">
     <div class="rec-head"><span id="confirm-title">Подтверждение</span></div>

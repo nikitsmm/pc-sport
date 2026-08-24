@@ -360,7 +360,16 @@
     var clips = videoIndex.items.filter(function (v) { return v.participantId === p.id && v.date === date; });
     var thumbs = clips.map(function (v) {
       var inner = v.thumb ? '<img src="' + v.thumb + '" alt="">' : '▶';
-      var reps = v.reps ? '<span class="vid-reps">' + v.reps + '</span>' : '';
+      /* Число повторений: у чужих и у уже заполненных — просто плашка.
+         У своих, где число НЕ указано — кликабельное «?»: снял, залил,
+         указать забыл. Переписать уже проставленное нельзя (и на
+         бэкенде тоже, см. action_update_video_reps) — иначе это способ
+         тихо подправить свой зачёт после того, как его увидели. */
+      var reps = v.reps
+        ? '<span class="vid-reps">' + v.reps + '</span>'
+        : (v.participantId === myId()
+            ? '<span class="vid-reps ask" data-setreps="' + v.id + '" data-repsdate="' + v.date + '" title="Указать количество повторений">?</span>'
+            : '');
       var daysLeft = videoIndex.retentionDays ? videoIndex.retentionDays - diffDays(v.date, today()) : null;
       var expiry = (daysLeft !== null && daysLeft <= 1)
         ? '<span class="vid-expiry" title="Удалится по расписанию">' + (daysLeft <= 0 ? 'сегодня' : 'завтра') + '</span>'
@@ -472,6 +481,12 @@
     });
     host.querySelectorAll('[data-play]').forEach(function (b) {
       b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who, b.dataset.reps); });
+    });
+    host.querySelectorAll('[data-setreps]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();   // не открывать плеер — тап именно по плашке
+        askRepsForVideo(b.dataset.setreps, b.dataset.repsdate);
+      });
     });
     host.querySelectorAll('[data-del]').forEach(function (b) {
       b.addEventListener('click', function (e) {
@@ -691,29 +706,147 @@
      первый кадр сразу) — оттого разница видна только у "своих" видео.
      Лечится явным seek на небольшое смещение от нуля и захватом кадра
      уже после события 'seeked', а не сразу по 'loadeddata'. */
+  /* Чёрные превью возвращались дважды. Первый заход лечил только одну
+     причину (нужен явный seek, иначе MediaRecorder-блоб рисует пустой
+     кадр) — но брал кадр на 0.15 с от начала, а это ещё до того, как
+     камера телефона выставит экспозицию: первые кадры почти всегда
+     тёмные, часто полностью чёрные. Плюс запасные таймеры могли
+     выстрелить РАНЬШЕ, чем придёт 'seeked', и захватить ровно тот
+     чёрный кадр нулевой позиции, который мы и пытались обойти.
+
+     Теперь: берём КАДР ИЗ СЕРЕДИНЫ ролика (там человек уже в кадре и
+     экспозиция настроена), проверяем среднюю яркость получившейся
+     картинки и, если она почти чёрная, пробуем другие позиции. Запасной
+     таймер снят на «капчу без seek» только как самый последний шанс —
+     лучше тёмное превью, чем никакого. */
+  var THUMB_POSITIONS = [0.5, 0.35, 0.7, 0.2];  // доли длительности: центр, потом соседние
+  var THUMB_MIN_BRIGHTNESS = 18;                 // 0..255; ниже — считаем кадр чёрным
+
+  function frameBrightness(ctx, w, h) {
+    try {
+      var d = ctx.getImageData(0, 0, w, h).data;
+      var sum = 0, n = 0;
+      /* Каждый 40-й пиксель — считать все незачем, разброс тут не важен,
+         важен только сам факт «кадр не чёрный». */
+      for (var i = 0; i < d.length; i += 160) {
+        sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+        n++;
+      }
+      return n ? sum / n : 0;
+    } catch (e) {
+      return 255; // getImageData может упасть на «грязном» canvas — тогда не бракуем кадр
+    }
+  }
+
+  /* Третий заход на чёрные превью — и вот тут настоящая причина, мимо
+     которой прошли оба предыдущих. У блоба от MediaRecorder длительность
+     в заголовке не записана (поток пишется на лету, размер заранее
+     неизвестен), и браузер до первого настоящего seek отдаёт
+     duration === Infinity. А ниже в tryPosition() стояла проверка
+     `if (!isFinite(dur)) { capture(false); return; }` — то есть на
+     собственных роликах приложения код мгновенно хватал кадр БЕЗ seek,
+     ровно на нулевой позиции: тот самый чёрный кадр, ради обхода
+     которого вся эта машинерия с позициями и яркостью и писалась. У
+     видео из галереи (готовый MP4 с нормальным заголовком) duration
+     известна сразу — потому баг и выглядел «через раз».
+
+     Классический обход: сикнуть в заведомо недостижимую позицию —
+     браузер упрётся в реальный конец записи, после чего duration
+     становится известна, и дальше уже можно спокойно целиться в центр. */
+  function resolveDuration(videoEl, cb) {
+    var dur = videoEl.duration;
+    if (isFinite(dur) && dur > 0) { cb(dur); return; }
+
+    var settled = false;
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      videoEl.removeEventListener('timeupdate', onUpdate);
+      videoEl.removeEventListener('durationchange', onUpdate);
+      cb(value);
+    }
+    function onUpdate() {
+      var d = videoEl.duration;
+      if (isFinite(d) && d > 0) finish(d);
+    }
+    videoEl.addEventListener('timeupdate', onUpdate);
+    videoEl.addEventListener('durationchange', onUpdate);
+    try { videoEl.currentTime = 1e7; } catch (e) { /* некоторые блобы не сикаются — уйдём по таймауту */ }
+    setTimeout(function () {
+      var d = videoEl.duration;
+      finish(isFinite(d) && d > 0 ? d : 0);
+    }, 1500);
+  }
+
   function grabThumbnail(videoEl) {
     var done = false;
-    function capture() {
-      if (done) return;
+    var attempt = 0;
+    var knownDuration = 0;
+
+    function capture(checkBrightness) {
+      if (done) return false;
       try {
         var w = 160, h = Math.round(160 * (videoEl.videoHeight / videoEl.videoWidth || 1.33));
         var canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
-        canvas.getContext('2d').drawImage(videoEl, 0, 0, w, h);
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(videoEl, 0, 0, w, h);
+
+        if (checkBrightness && frameBrightness(ctx, w, h) < THUMB_MIN_BRIGHTNESS) {
+          return false; // кадр чёрный — пусть вызывающий попробует другую позицию
+        }
         recSession.thumb = canvas.toDataURL('image/jpeg', 0.55);
         done = true;
-      } catch (e) { PCLog.warn('Миниатюра не собралась: ' + e.message); }
+        return true;
+      } catch (e) {
+        PCLog.warn('Миниатюра не собралась: ' + e.message);
+        return false;
+      }
     }
-    function seekThenCapture() {
-      var seekTo = Math.min(0.15, (videoEl.duration || 0.3) / 2);
-      if (!isFinite(seekTo) || seekTo <= 0) { capture(); return; }
-      videoEl.addEventListener('seeked', capture, { once: true });
-      videoEl.currentTime = seekTo;
-      setTimeout(capture, 500); // на случай, если 'seeked' почему-то не придёт
+
+    function tryPosition() {
+      if (done) return;
+      if (attempt >= THUMB_POSITIONS.length) {
+        capture(false); // позиции кончились — берём что есть, даже тёмное
+        return;
+      }
+      /* Длительность уже разобрана в resolveDuration до первого вызова
+         (в том числе для Infinity-блобов от MediaRecorder). Если она так
+         и не далась — берём фиксированную секунду от начала: это всё
+         равно лучше нулевой позиции, где кадр гарантированно чёрный. */
+      var seekTo = knownDuration > 0
+        ? knownDuration * THUMB_POSITIONS[attempt]
+        : 1 + attempt;
+      attempt++;
+
+      videoEl.addEventListener('seeked', function () {
+        /* requestAnimationFrame — после 'seeked' кадр не всегда уже
+           отрисован в элементе, даём браузеру один кадр на отрисовку. */
+        requestAnimationFrame(function () {
+          if (!capture(true)) tryPosition(); // вышло чёрное — следующая позиция
+        });
+      }, { once: true });
+      try { videoEl.currentTime = seekTo; }
+      catch (e) { tryPosition(); }
     }
-    if (videoEl.readyState >= 1) seekThenCapture(); // >=1 — уже знаем duration, можно сикать
-    else videoEl.addEventListener('loadedmetadata', seekThenCapture, { once: true });
-    setTimeout(capture, 1200); // общий запасной путь, если и seek не помог
+
+    function start() {
+      resolveDuration(videoEl, function (dur) {
+        knownDuration = dur;
+        tryPosition();
+      });
+    }
+
+    if (videoEl.readyState >= 1) start();
+    else videoEl.addEventListener('loadedmetadata', start, { once: true });
+
+    /* Последний рубеж: если ни один seek так и не сработал (некоторые
+       блобы на некоторых устройствах просто не сикаются) — хоть
+       что-нибудь, лучше тёмное превью, чем пустой значок. Времени дано
+       с запасом на разбор длительности (до 1.5 с) плюс сами попытки —
+       раньше таймер в 2.5 с успевал выстрелить прямо посреди перебора
+       позиций и фиксировал тот самый чёрный кадр. */
+    setTimeout(function () { capture(false); }, 6000);
   }
 
   function openGalleryPicker() {
@@ -819,23 +952,15 @@
        диалог (customConfirm), не встроенный confirm() — у стандартного
        кнопки "OK/Отмена" даёт сама ОС, подписать их "Да/Нет" через
        веб-API нельзя физически, только заменой на свою модалку. */
-    var needConfirm = false, need = 0, p = null;
+    /* Проверка нормы вынесена в общую maybeOfferCloseDay() — она же
+       теперь вызывается, когда число дописывают к уже залитому ролику
+       (см. askRepsForVideo). Раньше логика жила только здесь, поэтому
+       во втором сценарии предложение закрыть день не появлялось вообще.
+       Считаем СУММУ за день, а не повторения одного ролика: норму
+       делают подходами (три ролика по 20 при норме 50), по отдельности
+       ни один её не достигает. */
     if (meta.reps) {
-      p = state.participants.filter(function (x) { return x.id === s.participantId; })[0];
-      if (p && statusOf(p, s.date) !== 'done') {
-        need = task(p, s.date).reps;
-        needConfirm = meta.reps >= need;
-      }
-    }
-
-    if (needConfirm) {
-      customConfirm('Норма выполнена (' + meta.reps + ' из ' + need + ') — закрыть день как «Норма»?').then(function (yes) {
-        if (yes) {
-          setStatus(p, s.date, 'done');
-          PCLog.info('Норма закрыта автоматически по видео: ' + who + ', ' + shortDate(s.date) + ' (' + meta.reps + '/' + need + ')');
-        }
-        proceedWithVideoUpload();
-      });
+      maybeOfferCloseDay(s.participantId, s.date, meta.reps).then(proceedWithVideoUpload);
     } else {
       proceedWithVideoUpload();
     }
@@ -2270,6 +2395,14 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
+    { v: 'v55', items: [
+      'Чёрные превью у видео — починено по-настоящему: браузер не знал длительность роликов, снятых в приложении, и брал кадр с нулевой секунды',
+      'Уведомления больше не приходят, когда ты сидишь в чате',
+      'Повторения можно дописать к уже отправленному видео — на своём ролике без числа появилась плашка «?»',
+      'Предложение закрыть норму теперь появляется и когда дописываешь повторения, а не только при отправке видео',
+      'Уведомления можно выключить: колокольчик на главной и кнопка в настройках стали переключателями',
+      'Если подписка на уведомления отвалится сама — приложение молча восстановит её при следующем запуске'
+    ] },
     { v: 'v54', items: [
       'Поле ввода в чате больше не может пропасть: оно теперь обычная нижняя строка экрана чата, а не «плавающий» слой поверх — именно плавающий слой уезжал за пределы экрана на айфоне',
       'Чат честно прижимается к низу: прокручивается только сама лента сообщений, а не страница целиком',
@@ -2349,6 +2482,236 @@
   /* ============================================================
      Общая отрисовка и навигация
      ============================================================ */
+  /* ============================================================
+     Уведомления — один переключатель на два места (колокольчик на
+     «Сегодня» и кнопка в настройках), плюс тихая самопроверка.
+
+     Раньше кнопка умела только включать: выключить уведомления из
+     приложения было нельзя вообще, только через системные настройки
+     телефона. И отдельно — подписка могла молча отвалиться (браузер
+     вправе её отозвать: переустановка PWA, чистка данных сайта,
+     ротация ключей на стороне push-службы), а человек об этом узнавал
+     только по факту «включал же, а ничего не приходит».
+
+     Флаг «человек хотел уведомления» живёт локально и переживает
+     отзыв подписки — именно по нему ensurePushSubscription() понимает,
+     что подписку надо тихо восстановить, а не что человек её выключил.
+     ============================================================ */
+  /* ============================================================
+     Повторения у уже залитого видео + проверка нормы.
+
+     Проверка нормы теперь живёт ОТДЕЛЬНО от отправки видео и
+     вызывается в момент, когда число повторений реально становится
+     известно — и при отправке нового ролика, и когда число дописали к
+     старому. Раньше она была намертво вшита в sendRecordingUI(), то
+     есть срабатывала только в одном сценарии из двух.
+     ============================================================ */
+
+  /* Сумма повторений за день по индексу видео. extraReps — ролик,
+     которого в индексе ещё нет (только что отправляется). */
+  function dayReps(participantId, date, extraReps) {
+    var sum = videoIndex.items
+      .filter(function (v) { return v.participantId === participantId && v.date === date; })
+      .reduce(function (s, v) { return s + (v.reps || 0); }, 0);
+    return sum + (extraReps || 0);
+  }
+
+  /* Предложить закрыть день, если сумма за день дотянула до нормы.
+     Возвращает промис — вызывающий может дождаться ответа, если ему
+     важен порядок (как при отправке видео). */
+  function maybeOfferCloseDay(participantId, date, extraReps) {
+    var p = state.participants.filter(function (x) { return x.id === participantId; })[0];
+    if (!p || statusOf(p, date) === 'done') return Promise.resolve(false);
+
+    var need = task(p, date).reps;
+    var total = dayReps(participantId, date, extraReps);
+    if (total < need) return Promise.resolve(false);
+
+    return customConfirm('Норма выполнена (' + total + ' из ' + need + ') — закрыть день как «Норма»?')
+      .then(function (yes) {
+        if (yes) {
+          setStatus(p, date, 'done');
+          PCLog.info('Норма закрыта по повторениям: ' + participantName(participantId) +
+                     ', ' + shortDate(date) + ' (' + total + '/' + need + ')');
+        }
+        return yes;
+      });
+  }
+
+  /* Ввод числа повторений для уже залитого ролика. Свой диалог, а не
+     window.prompt(): на iOS в установленном на «Экран Домой» PWA
+     системный prompt местами не показывается вообще. */
+  function askRepsForVideo(videoId, date) {
+    var overlay = $('#repsOverlay');
+    var input = $('#reps-input');
+    var msg = $('#reps-msg');
+    input.value = '';
+    msg.textContent = '';
+    overlay.classList.add('on');
+    setTimeout(function () { input.focus(); }, 50);
+
+    function close() {
+      overlay.classList.remove('on');
+      $('#reps-ok').removeEventListener('click', onOk);
+      $('#reps-cancel').removeEventListener('click', close);
+    }
+
+    function onOk() {
+      var n = parseInt(input.value, 10);
+      if (!(n > 0)) { msg.textContent = 'Введи число больше нуля'; return; }
+      $('#reps-ok').disabled = true;
+      msg.textContent = 'Сохраняю…';
+      Storage.video.updateReps(myId(), videoId, n).then(function () {
+        PCLog.info('Повторения указаны для видео ' + videoId + ': ' + n);
+        $('#reps-ok').disabled = false;
+        close();
+        /* Обновляем индекс и только потом считаем сумму за день —
+           иначе только что вписанное число в подсчёт не попадёт. */
+        return refreshVideoIndex().then(function () {
+          return maybeOfferCloseDay(myId(), date, 0);
+        });
+      }).catch(function (e) {
+        $('#reps-ok').disabled = false;
+        msg.textContent = 'Не получилось: ' + e.message;
+        PCLog.error('Не удалось указать повторения: ' + e.message);
+      });
+    }
+
+    $('#reps-ok').addEventListener('click', onOk);
+    $('#reps-cancel').addEventListener('click', close);
+  }
+
+  /* Короткое всплывающее сообщение — для действий с главной страницы,
+     где нет своей строки статуса (колокольчик). Возвращает объект с той
+     же формой, что и обычный status-line элемент, чтобы
+     toggleNotifications() не разбирался, откуда его позвали. */
+  function toastStatus() {
+    var el = $('#toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'toast';
+      el.className = 'toast';
+      document.body.appendChild(el);
+    }
+    var hideTimer = null;
+    return {
+      set textContent(v) {
+        el.textContent = v;
+        el.classList.add('on');
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(function () { el.classList.remove('on'); }, 3500);
+      },
+      set className(v) {
+        el.className = 'toast on' + (v.indexOf('err') !== -1 ? ' err' : '');
+      }
+    };
+  }
+
+  var LS_PUSH_WANTED = 'pcsport.pushWanted';
+
+  function pushWanted() {
+    try { return localStorage.getItem(LS_PUSH_WANTED) === '1'; } catch (e) { return false; }
+  }
+  function setPushWanted(on) {
+    try { localStorage.setItem(LS_PUSH_WANTED, on ? '1' : '0'); } catch (e) {}
+  }
+
+  function renderNotifyButtons(state) {
+    var bell = $('#bell-btn');
+    var cfgBtn = $('#cfg-notify');
+    var on = state === 'on';
+    if (bell) {
+      bell.textContent = on ? '🔔' : '🔕';
+      bell.classList.toggle('off', !on);
+      bell.title = on ? 'Уведомления включены — выключить' : 'Уведомления выключены — включить';
+    }
+    if (cfgBtn) {
+      cfgBtn.textContent = on ? 'Выключить уведомления' : 'Включить уведомления о новых сообщениях';
+      cfgBtn.classList.toggle('ghost', on);
+    }
+  }
+
+  /* Тихая сверка: человек уведомления включал, разрешение в браузере
+     есть — а живой подписки нет. Молча оформляем заново, ничего не
+     спрашивая: для человека «включил — значит работает», а не «включил,
+     потом само отвалилось». */
+  function ensurePushSubscription() {
+    if (!pushWanted() || !myId()) return;
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!Storage.webpush.supported()) return;
+
+    Storage.webpush.isSubscribed().then(function (has) {
+      if (has) {
+        /* Подписка на месте — но у сервера её могло не остаться
+           (например, чистка протухших записей задела лишнее). Отправляем
+           повторно: на бэкенде это идемпотентно по endpoint, дубля не
+           создаст. */
+        return Storage.webpush.subscribe(myId()).then(function () {
+          renderNotifyButtons('on');
+        });
+      }
+      PCLog.warn('Push-подписка пропала — восстанавливаю молча');
+      return Storage.webpush.subscribe(myId()).then(function () {
+        PCLog.info('Push-подписка восстановлена автоматически');
+        renderNotifyButtons('on');
+      });
+    }).catch(function (e) {
+      PCLog.warn('Не удалось сверить push-подписку: ' + e.message);
+    });
+  }
+
+  /* Общий обработчик для обеих кнопок — колокольчика и настроек. */
+  function toggleNotifications(statusEl) {
+    function say(text, cls) {
+      if (statusEl) { statusEl.textContent = text; statusEl.className = 'status-line' + (cls ? ' ' + cls : ''); }
+    }
+
+    if (!('Notification' in window)) { say('Браузер не поддерживает уведомления', 'err'); return; }
+    if (!myId()) { say('Сначала выбери, кто ты', 'err'); return; }
+
+    // Выключение — если человек уже подписан
+    if (pushWanted()) {
+      say('Выключаю…');
+      setPushWanted(false);
+      Storage.webpush.unsubscribe(myId()).then(function () {
+        say('Уведомления выключены', 'ok');
+        PCLog.info('Push-подписка отключена вручную');
+        renderNotifyButtons('off');
+      }).catch(function (e) {
+        /* Даже если отписаться на сервере не вышло — локальный флаг уже
+           снят, и ensurePushSubscription() больше не будет её
+           восстанавливать. Для человека выключено, а остаточная запись
+           на сервере отвалится сама при первой же неудачной отправке. */
+        say('Выключено (сервер ответил ошибкой: ' + e.message + ')', 'err');
+        renderNotifyButtons('off');
+      });
+      return;
+    }
+
+    // Включение
+    Notification.requestPermission().then(function (perm) {
+      if (perm !== 'granted') {
+        say('Не разрешено в браузере', 'err');
+        PCLog.warn('Уведомления не разрешены: ' + perm);
+        return;
+      }
+      if (!Storage.webpush.supported()) {
+        say('Разрешение получено, но push не поддерживается — на iPhone работает только для версии, добавленной на «Экран Домой»', 'err');
+        return;
+      }
+      say('Оформляю подписку…');
+      Storage.webpush.subscribe(myId()).then(function () {
+        setPushWanted(true);
+        say('Включено — прилетит, даже если приложение полностью закрыто', 'ok');
+        PCLog.info('Push-подписка оформлена для ' + myId());
+        renderNotifyButtons('on');
+      }).catch(function (e) {
+        say('Не получилось подписаться: ' + e.message, 'err');
+        PCLog.error('Push-подписка не удалась: ' + e.message);
+      });
+    });
+  }
+
   function render() {
     renderWhoBtn();
     renderToday();
@@ -2356,6 +2719,17 @@
     renderMoney();
     renderCfg();
     renderChat();
+    renderNotifyButtons(pushWanted() ? 'on' : 'off');
+  }
+
+  /* Видна ли сейчас вкладка «Чат» — для service worker (см. sw.js,
+     обработчик 'push'). SW не имеет доступа к переменным страницы, но
+     видит client.url, поэтому признак живёт в адресе. */
+  function markChatOpenInUrl(isOpen) {
+    try {
+      var base = location.pathname + location.search;
+      history.replaceState(null, '', isOpen ? base + '#chat-open' : base);
+    } catch (e) { /* history может быть недоступна — не критично, push просто будет приходить как раньше */ }
   }
 
   function show(view) {
@@ -2378,6 +2752,14 @@
        целиком (см. body.chat-open в styles.css) — иначе под чатом
        оставалась оттягиваемая "губа" из фона body. */
     document.body.classList.toggle('chat-open', view === 'chat');
+
+    /* Метка в адресе — единственное, что service worker может увидеть
+       снаружи (ему доступен только client.url, до переменных страницы
+       он не дотянется). По ней SW решает, показывать ли push: если чат
+       открыт и окно видимое — уведомление не показывается, человек и
+       так видит сообщение мгновенно. replaceState, а не hash = ... —
+       чтобы не плодить записи в истории и не ловить лишний hashchange. */
+    markChatOpenInUrl(view === 'chat');
 
     if (view === 'chat') {
       chatStickToBottom = true; // открытие — всегда считаем, что едем в самый низ
@@ -2583,34 +2965,16 @@
     });
 
     $('#cfg-notify').addEventListener('click', function () {
-      var st = $('#cfg-notify-status');
-      if (!('Notification' in window)) { st.textContent = 'Браузер не поддерживает уведомления'; st.className = 'status-line err'; return; }
-      if (!myId()) { st.textContent = 'Сначала выбери, кто ты (см. выше)'; st.className = 'status-line err'; return; }
-
-      Notification.requestPermission().then(function (perm) {
-        if (perm !== 'granted') {
-          st.textContent = 'Не разрешено в браузере';
-          st.className = 'status-line err';
-          PCLog.warn('Уведомления не разрешены: ' + perm);
-          return;
-        }
-        if (!Storage.webpush.supported()) {
-          st.textContent = 'Разрешение получено, но push не поддерживается — на iPhone работает только для версии, добавленной на «Экран Домой»';
-          st.className = 'status-line err';
-          return;
-        }
-        st.textContent = 'Оформляю подписку…';
-        Storage.webpush.subscribe(myId()).then(function () {
-          st.textContent = 'Включено — теперь прилетит, даже если приложение полностью закрыто';
-          st.className = 'status-line ok';
-          PCLog.info('Push-подписка оформлена для ' + myId());
-        }).catch(function (e) {
-          st.textContent = 'Не получилось подписаться: ' + e.message;
-          st.className = 'status-line err';
-          PCLog.error('Push-подписка не удалась: ' + e.message);
-        });
-      });
+      toggleNotifications($('#cfg-notify-status'));
     });
+
+    /* Колокольчик на «Сегодня» — тот же переключатель, что и в
+       настройках, просто под рукой. Статус показываем коротким
+       всплывающим сообщением, отдельной строки статуса на главной нет. */
+    var bell = $('#bell-btn');
+    if (bell) {
+      bell.addEventListener('click', function () { toggleNotifications(toastStatus()); });
+    }
 
     $('#log-copy').addEventListener('click', function () {
       var text = PCLog.asText() || '(логов пока нет)';
@@ -2908,7 +3272,31 @@
       window.addEventListener('load', function () {
         navigator.serviceWorker.register('sw.js').catch(function () {});
       });
+
+      /* Service worker спрашивает перед показом push: «чат сейчас
+         открыт?». Отвечаем честно — по реальному состоянию вкладки, а
+         не по метке в адресе (см. пояснение в sw.js: на iOS client.url
+         в SW после replaceState остаётся прежним, и push прилетал
+         человеку, который в этот момент смотрел прямо в чат). */
+      navigator.serviceWorker.addEventListener('message', function (e) {
+        if (!e.data || e.data.type !== 'pcsport-is-chat-open') return;
+        var chatView = document.getElementById('v-chat');
+        var open = !!(chatView && chatView.classList.contains('on')) &&
+                   document.visibilityState === 'visible';
+        if (e.ports && e.ports[0]) e.ports[0].postMessage({ chatOpen: open });
+      });
     }
+
+    /* Подписка на push может «протухнуть» сама по себе — браузер вправе
+       её отозвать (переустановка PWA, чистка данных, ротация ключей на
+       стороне push-службы). Для человека это выглядит как «включал же —
+       а не приходят». Поэтому при каждом запуске и возврате в
+       приложение тихо сверяем: если человек уведомления включал, а
+       живой подписки в браузере уже нет — оформляем заново, молча. */
+    ensurePushSubscription();
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) ensurePushSubscription();
+    });
   }
 
   document.addEventListener('DOMContentLoaded', boot);

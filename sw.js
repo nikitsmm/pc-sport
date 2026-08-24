@@ -7,7 +7,7 @@
    телефон в сети, всегда грузится свежее; кэш нужен только когда сети
    вообще нет. */
 
-var CACHE = 'pcsport-v54';
+var CACHE = 'pcsport-v55';
 /* С ?v= — теми же адресами, какими их запрашивает index.html (см.
    комментарий там). Без совпадения адресов офлайн-кэш просто не нашёлся
    бы по запрошенному URL. */
@@ -91,13 +91,60 @@ self.addEventListener('push', function (e) {
   try { data = e.data ? e.data.json() : {}; } catch (err) {}
   var title = data.title || 'ПЦ Спорт';
 
+  /* Не дёргать уведомлением того, кто прямо сейчас смотрит в чат —
+     он и так видит сообщение мгновенно (Centrifugo). Решение принимаем
+     здесь, а не на сервере: сервер не знает и не может знать, какая
+     вкладка сейчас открыта у каждого получателя, а SW может спросить
+     об этом сами окна. Условие двойное: окно должно быть видимым
+     (visibilityState === 'visible' — то есть приложение не свёрнуто) И
+     в нём должна быть открыта именно вкладка «Чат» (это окно сообщает
+     через свойство, которое app.js держит в актуальном состоянии, см.
+     broadcastChatVisibility). */
+  /* Раньше признак «чат открыт» читался только из client.url (метка
+     #chat-open, которую страница ставит через history.replaceState).
+     На практике не сработало: на iOS client.url в service worker после
+     replaceState часто остаётся прежним — SW видел старый адрес без
+     метки и показывал уведомление человеку, который в этот момент
+     смотрел прямо в чат. Теперь SW спрашивает саму страницу через
+     postMessage и ждёт ответа (недолго, 400 мс — push нельзя держать
+     бесконечно), а метка в адресе осталась только как запасной вариант,
+     если окно почему-то не ответило. */
+  function clientWatchingChat(c) {
+    return new Promise(function (resolve) {
+      if (c.visibilityState !== 'visible') { resolve(false); return; }
+      var fallback = !!(c.url && c.url.indexOf('#chat-open') !== -1);
+      var answered = false;
+      var ch = new MessageChannel();
+      ch.port1.onmessage = function (ev) {
+        if (answered) return;
+        answered = true;
+        resolve(!!(ev.data && ev.data.chatOpen));
+      };
+      try {
+        c.postMessage({ type: 'pcsport-is-chat-open' }, [ch.port2]);
+      } catch (err) {
+        resolve(fallback);
+        return;
+      }
+      setTimeout(function () {
+        if (!answered) { answered = true; resolve(fallback); }
+      }, 400);
+    });
+  }
+
   e.waitUntil(
-    self.registration.showNotification(title, {
-      body: data.body || 'Новое сообщение',
-      tag: data.tag || 'pcsport-chat',
-      icon: 'icons/icon-192.png',
-      badge: 'icons/icon-192.png',
-      renotify: true
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+      return Promise.all(list.map(clientWatchingChat));
+    }).then(function (answers) {
+      if (answers.some(Boolean)) return;   // тихо, человек и так всё видит
+
+      return self.registration.showNotification(title, {
+        body: data.body || 'Новое сообщение',
+        tag: data.tag || 'pcsport-chat',
+        icon: 'icons/icon-192.png',
+        badge: 'icons/icon-192.png',
+        renotify: true
+      });
     })
   );
 });
