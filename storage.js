@@ -376,6 +376,18 @@
          не подтвердился — это НЕ потеря: файл уже физически в бакете,
          запись о нём в общий список подтянется сама при следующем
          открытии «Видео дня» (list_videos сверяется с бакетом). */
+      /* Записи, которые прямо сейчас грузятся. Без этого выходил дубль:
+         пока идут повторы при плохой сети (это легко 30+ секунд), запись
+         ещё лежит в очереди IndexedDB — она удаляется только после
+         успеха. Стоит в этот момент свернуть и вернуть приложение, как
+         срабатывает resumePendingVideos() (он висит на visibilitychange),
+         находит эту же запись и запускает ВТОРУЮ параллельную загрузку:
+         новый get_upload_url → новый videoId → новый путь в бакете →
+         оба дозаливаются → два одинаковых ролика в списке. Отсюда и
+         «пошла попытка 2/3, и вдруг видео загрузилось с нуля» — это
+         буквально вторая загрузка, стартовавшая с 0%. */
+      _inFlight: {},
+
       upload: async function (participantId, date, blob, ext, onProgress, onPhase, meta) {
         meta = meta || {};
         var cfg = Config.read();
@@ -384,47 +396,66 @@
         }
 
         var pendingId = meta.pendingId || ('pv-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+        if (this._inFlight[pendingId]) {
+          throw new Error('Это видео уже загружается');
+        }
+        this._inFlight[pendingId] = true;
+        var self = this;
+
         try {
-          await idbPut({
-            id: pendingId, participantId: participantId, date: date, ext: ext, blob: blob,
-            reps: meta.reps || null, thumb: meta.thumb || null, createdAt: Date.now()
-          });
-        } catch (e) { /* IndexedDB недоступен — грузим без страховки на закрытие приложения */ }
-
-        var upMeta = await api(cfg.url, 'get_upload_url', { participantId: participantId, date: date, ext: ext });
-
-        var attempts = 3, lastErr = null;
-        for (var i = 0; i < attempts; i++) {
           try {
-            await putOnce(upMeta.uploadUrl, upMeta.contentType, blob, onProgress, onPhase);
-            lastErr = null;
-            break;
-          } catch (e) {
-            lastErr = e;
-            if (i < attempts - 1) {
-              if (onPhase) onPhase('Сеть подвела — пробую снова (' + (i + 2) + '/' + attempts + ')…');
-              await wait(2000 * (i + 1));
+            await idbPut({
+              id: pendingId, participantId: participantId, date: date, ext: ext, blob: blob,
+              reps: meta.reps || null, thumb: meta.thumb || null, createdAt: Date.now()
+            });
+          } catch (e) { /* IndexedDB недоступен — грузим без страховки на закрытие приложения */ }
+
+          var upMeta = await api(cfg.url, 'get_upload_url', { participantId: participantId, date: date, ext: ext });
+
+          var attempts = 3, lastErr = null;
+          for (var i = 0; i < attempts; i++) {
+            try {
+              await putOnce(upMeta.uploadUrl, upMeta.contentType, blob, onProgress, onPhase);
+              lastErr = null;
+              break;
+            } catch (e) {
+              lastErr = e;
+              if (i < attempts - 1) {
+                if (onPhase) onPhase('Сеть подвела — пробую снова (' + (i + 2) + '/' + attempts + ')…');
+                await wait(2000 * (i + 1));
+              }
             }
           }
+          if (lastErr) throw lastErr; // запись остаётся в IndexedDB — можно дозалить позже
+
+          if (onPhase) onPhase('Записываю в общий список видео…');
+          var confirmed = true;
+          try {
+            await apiRetry(cfg.url, 'confirm_upload', {
+              participantId: participantId, date: date, videoId: upMeta.videoId, path: upMeta.path, ext: ext,
+              size: blob.size, reps: meta.reps || null, thumb: meta.thumb || null
+            }, 3);
+          } catch (e) { confirmed = false; }
+
+          try { await idbDelete(pendingId); } catch (e) {}
+          return { confirmed: confirmed, path: upMeta.path, videoId: upMeta.videoId };
+        } finally {
+          delete self._inFlight[pendingId];
         }
-        if (lastErr) throw lastErr; // запись остаётся в IndexedDB — можно дозалить позже
-
-        if (onPhase) onPhase('Записываю в общий список видео…');
-        var confirmed = true;
-        try {
-          await apiRetry(cfg.url, 'confirm_upload', {
-            participantId: participantId, date: date, videoId: upMeta.videoId, path: upMeta.path, ext: ext,
-            size: blob.size, reps: meta.reps || null, thumb: meta.thumb || null
-          }, 3);
-        } catch (e) { confirmed = false; }
-
-        try { await idbDelete(pendingId); } catch (e) {}
-        return { confirmed: confirmed, path: upMeta.path, videoId: upMeta.videoId };
       },
 
       /* Список ещё не отправленных роликов — например, после того как
-         приложение закрыли посреди обрыва сети. */
-      pending: function () { return idbGetAll().catch(function () { return []; }); },
+         приложение закрыли посреди обрыва сети. Те, что грузятся прямо
+         сейчас, отсюда исключены: иначе автодозагрузка подхватила бы
+         запись, которая уже в работе, и создала дубль (см. _inFlight). */
+      pending: function () {
+        var self = this;
+        return idbGetAll()
+          .then(function (items) {
+            return items.filter(function (it) { return !self._inFlight[it.id]; });
+          })
+          .catch(function () { return []; });
+      },
 
       /* Убрать из очереди без отправки — например, если решили
          пересобрать заново, не досылать старую попытку. */
