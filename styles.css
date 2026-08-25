@@ -261,6 +261,13 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 /* ---------- модалки записи/просмотра ---------- */
 .rec-overlay{position:fixed;inset:0;background:rgba(16,23,30,.92);z-index:80;display:none;align-items:flex-end;justify-content:center;}
 .rec-overlay.on{display:flex;}
+/* Подтверждение и ввод повторений всегда вызываются ПОВЕРХ другого
+   экрана (например, поверх модалки записи — «норма выполнена, закрыть
+   день?» спрашивается в момент отправки видео). При одинаковом z-index
+   побеждал тот, кто ниже в разметке, — то есть модалка записи, и диалог
+   оказывался под ней: человек его не видел, отправка молча вставала
+   намертво, а повторные нажатия плодили дубли видео. */
+#confirmOverlay, #repsOverlay{z-index:120;}
 .rec-box{background:var(--ink);color:#fff;width:100%;max-width:520px;padding-bottom:calc(16px + var(--safe-b));}
 .rec-head{display:flex;justify-content:space-between;align-items:center;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 10px;
   font-family:"Unbounded",sans-serif;font-weight:600;font-size:14px;text-transform:uppercase;}
@@ -445,6 +452,31 @@ body.chat-open{overflow:hidden;}
 .react-pill{display:flex;align-items:center;gap:3px;padding:2px 7px;border-radius:11px;font-size:11.5px;
   border:2px solid var(--chat-bg);background:var(--chat-surface2);color:var(--chat-text);}
 .react-pill.mine{background:rgba(135,116,225,.4);}
+
+/* Чип появляется с лёгким «пружинным» подскоком — как в Telegram, где
+   реакция не возникает резко, а слегка выпрыгивает. */
+.react-pill{animation:reactPop .22s cubic-bezier(.3,1.4,.5,1);}
+@keyframes reactPop{
+  from{transform:scale(.4);opacity:0;}
+  to{transform:scale(1);opacity:1;}
+}
+
+/* Мини-салют вокруг только что поставленной реакции. Отдельный слой
+   поверх всего (position:fixed, pointer-events:none) — намеренно НЕ
+   внутри сообщения: любая вставка внутрь пузыря снова меняла бы его
+   высоту, а её только что зафиксировал якорь прокрутки. */
+.react-burst{position:fixed;z-index:300;pointer-events:none;width:0;height:0;}
+.react-burst span{position:absolute;left:0;top:0;font-size:13px;line-height:1;
+  animation:reactBurst .75s ease-out forwards;}
+@keyframes reactBurst{
+  0%{transform:translate(-50%,-50%) scale(.5);opacity:0;}
+  25%{opacity:1;}
+  100%{transform:translate(calc(-50% + var(--dx)),calc(-50% + var(--dy))) scale(1.15);opacity:0;}
+}
+@media (prefers-reduced-motion:reduce){
+  .react-pill{animation:none;}
+  .react-burst{display:none;}
+}
 
 .bubble.pending{opacity:.55;}
 

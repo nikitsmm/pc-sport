@@ -920,6 +920,7 @@
   }
 
   function retakeUI() {
+    if (recSession) recSession.sending = false;  // снятый заново ролик снова можно отправлять
     var preview = $('#rec-preview');
     if (preview.src) URL.revokeObjectURL(preview.src);
     preview.src = '';
@@ -939,6 +940,15 @@
 
   function sendRecordingUI() {
     if (!recSession || !recSession.blob) return;
+    /* Замок на время всей отправки. Без него любая заминка между
+       нажатием и началом реальной загрузки (а именно так и вышло, когда
+       диалог «норма выполнена?» открывался под модалкой записи и был не
+       виден) превращается в: человек жмёт «Отправить» ещё и ещё, и
+       каждое нажатие запускает отдельную загрузку того же ролика —
+       дубли видео и по сообщению в чат на каждую. */
+    if (recSession.sending) return;
+    recSession.sending = true;
+
     var s = recSession;
     var who = participantName(s.participantId);
     var repsVal = parseInt($('#rec-reps').value, 10);
@@ -960,7 +970,33 @@
        делают подходами (три ролика по 20 при норме 50), по отдельности
        ни один её не достигает. */
     if (meta.reps) {
-      maybeOfferCloseDay(s.participantId, s.date, meta.reps).then(proceedWithVideoUpload);
+      /* Страховка: что бы ни случилось с диалогом, отправка обязана
+         начаться. Именно на этом шаге всё и вставало намертво — диалог
+         открывался под модалкой записи, человек его не видел и ответить
+         не мог, промис не разрешался никогда, а видео просто не
+         уходило. Даже если такое повторится по другой причине — через
+         20 секунд грузим без закрытия дня (норму всегда можно отметить
+         руками, потерять сам ролик куда обиднее). */
+      var offerDone = false;
+      var offerTimeout = setTimeout(function () {
+        if (offerDone) return;
+        offerDone = true;
+        PCLog.warn('Диалог закрытия нормы не ответил за 20 с — отправляю видео без него');
+        proceedWithVideoUpload();
+      }, 20000);
+
+      maybeOfferCloseDay(s.participantId, s.date, meta.reps).then(function () {
+        if (offerDone) return;
+        offerDone = true;
+        clearTimeout(offerTimeout);
+        proceedWithVideoUpload();
+      }).catch(function (e) {
+        if (offerDone) return;
+        offerDone = true;
+        clearTimeout(offerTimeout);
+        PCLog.warn('Проверка нормы сорвалась (' + e.message + ') — отправляю видео');
+        proceedWithVideoUpload();
+      });
     } else {
       proceedWithVideoUpload();
     }
@@ -1007,6 +1043,11 @@
       }, r.confirmed ? 500 : 1500);
     }).catch(function (e) {
       clearTimeout(slowHint);
+      /* Снимаем замок — здесь показывается кнопка «Повторить отправку»,
+         и она должна работать. Замок защищает от случайных повторных
+         нажатий во время отправки, а не от осознанного повтора после
+         честной неудачи. */
+      if (recSession) recSession.sending = false;
       $('#rec-msg').textContent = 'Не отправилось после нескольких попыток: ' + e.message + '. Ролик никуда не делся — можно сохранить в галерею или попробовать ещё раз.';
       $('#rec-controls-savefail').hidden = false;
       PCLog.error('Видео: загрузка не удалась (' + who + '): ' + e.message);
@@ -1295,27 +1336,94 @@
      чего лента визуально "дёргалась"/перерисовывалась целиком на
      ровном месте. Теперь патчим точечно: только .msg-reactions именно
      этого сообщения, остальной DOM (и текущая прокрутка) не трогаем. */
-  function patchMessageReactions(messageId) {
+  /* Якорь прокрутки. Когда у пузыря в середине ленты появляется чип
+     реакции, пузырь становится выше — и всё, что НИЖЕ него, уезжает
+     вниз, дёргая картинку под пальцем. В Telegram Web этого нет:
+     низ остаётся на месте, а лента ВЫШЕ изменения сдвигается вверх.
+
+     Приём ровно один: контейнер вырос на Δ — увеличиваем scrollTop на
+     ту же Δ. Тогда всё, что ниже изменения, остаётся на прежнем месте
+     на экране, а сдвиг «съедается» сверху, где на него никто не
+     смотрит. CSS-свойство overflow-anchor делает это само, но Safari
+     его не поддерживает — а у нас всё живёт именно на айфонах, так что
+     считаем руками. */
+  function withScrollAnchor(fn) {
+    var log = document.getElementById('chat-log');
+    if (!log) { fn(); return; }
+    var before = log.scrollHeight;
+    var top = log.scrollTop;
+    /* Если человек и так внизу ленты — ничего компенсировать не надо,
+       пусть новый чип просто появится, а лента останется прижатой к
+       низу (иначе низ бы «отклеился» на высоту чипа). */
+    var atBottom = (before - top - log.clientHeight) < 4;
+    fn();
+    if (atBottom) { log.scrollTop = log.scrollHeight; return; }
+    var delta = log.scrollHeight - before;
+    if (delta) log.scrollTop = top + delta;
+  }
+
+  function patchMessageReactions(messageId, animateEmoji) {
     var row = document.querySelector('.msg-row[data-mid="' + messageId + '"]');
     var m = chatMessages.filter(function (x) { return x.id === messageId; })[0];
     if (!row || !m) return;
     var col = row.querySelector('.msg-col');
     if (!col) return;
-    var existing = col.querySelector('.msg-reactions');
-    var html = renderReactions(m);
-    if (!html) { if (existing) existing.remove(); return; }
-    if (existing) existing.outerHTML = html; else col.insertAdjacentHTML('beforeend', html);
-    col.querySelectorAll('.react-pill').forEach(wireReactPill);
+
+    withScrollAnchor(function () {
+      var existing = col.querySelector('.msg-reactions');
+      var html = renderReactions(m);
+      if (!html) { if (existing) existing.remove(); return; }
+      if (existing) existing.outerHTML = html; else col.insertAdjacentHTML('beforeend', html);
+      col.querySelectorAll('.react-pill').forEach(wireReactPill);
+    });
+
+    if (animateEmoji) burstReaction(col, animateEmoji);
+  }
+
+  /* Мини-салют вокруг реакции — как в Telegram. Чисто косметика поверх
+     уже применённой реакции: несколько копий эмодзи разлетаются и
+     тают. Живёт в отдельном слое поверх чипа и сам себя убирает, в
+     разметку сообщения не вмешивается (иначе бы снова поехала высота,
+     которую мы только что аккуратно зафиксировали якорем). */
+  function burstReaction(col, emoji) {
+    var pill = col.querySelector('.react-pill[data-emoji="' + emoji + '"]');
+    if (!pill) return;
+    var rect = pill.getBoundingClientRect();
+    var layer = document.createElement('div');
+    layer.className = 'react-burst';
+    layer.style.left = (rect.left + rect.width / 2) + 'px';
+    layer.style.top = (rect.top + rect.height / 2) + 'px';
+
+    for (var i = 0; i < 6; i++) {
+      var s = document.createElement('span');
+      s.textContent = emoji;
+      var angle = (Math.PI * 2 * i) / 6 + (Math.random() * 0.5 - 0.25);
+      var dist = 26 + Math.random() * 18;
+      s.style.setProperty('--dx', Math.cos(angle) * dist + 'px');
+      s.style.setProperty('--dy', Math.sin(angle) * dist + 'px');
+      s.style.animationDelay = (Math.random() * 60) + 'ms';
+      layer.appendChild(s);
+    }
+    document.body.appendChild(layer);
+    setTimeout(function () { layer.remove(); }, 900);
   }
 
   function wireReactPill(b) {
     b.addEventListener('click', function (e) {
       e.stopPropagation();
       var myIdVal = myId();
-      Storage.chat.react(myIdVal, b.dataset.mid, b.dataset.emoji).then(function (updated) {
-        var m = chatMessages.filter(function (x) { return x.id === b.dataset.mid; })[0];
+      var emoji = b.dataset.emoji;
+      var mid = b.dataset.mid;
+      /* Салютуем только когда реакцию ПОСТАВИЛИ, а не сняли: повторный
+         тап по своему же чипу снимает реакцию, и фейерверк на снятие
+         выглядел бы странно. Понимаем это по состоянию до запроса. */
+      var hadMine = ((chatMessages.filter(function (x) { return x.id === mid; })[0] || {}).reactions || {});
+      var wasMine = (hadMine[emoji] || []).indexOf(myIdVal) !== -1;
+
+      Storage.chat.react(myIdVal, mid, emoji).then(function (updated) {
+        var m = chatMessages.filter(function (x) { return x.id === mid; })[0];
         if (m) m.reactions = updated.reactions;
-        patchMessageReactions(b.dataset.mid);
+        patchMessageReactions(mid, wasMine ? null : emoji);
       }).catch(function (e2) { PCLog.warn('Реакция не отправилась: ' + e2.message); });
     });
   }
@@ -1682,10 +1790,13 @@
     panel.querySelectorAll('.quick-react').forEach(function (b) {
       b.addEventListener('click', function () {
         closeMessageMenu();
-        Storage.chat.react(myIdVal, m.id, b.dataset.emoji).then(function (updated) {
+        var emoji = b.dataset.emoji;
+        var prev = (m.reactions || {})[emoji] || [];
+        var wasMine = prev.indexOf(myIdVal) !== -1;   // повторный тап = снятие, салют не нужен
+        Storage.chat.react(myIdVal, m.id, emoji).then(function (updated) {
           var mm = chatMessages.filter(function (x) { return x.id === m.id; })[0];
           if (mm) mm.reactions = updated.reactions;
-          patchMessageReactions(m.id);
+          patchMessageReactions(m.id, wasMine ? null : emoji);
         }).catch(function (e) { PCLog.warn('Реакция не отправилась: ' + e.message); });
       });
     });
@@ -1811,7 +1922,16 @@
      сказать, что сообщение, которого нет в ответе, но есть локально,
      было удалено — при since-опросе его отсутствие ничего не значит,
      сервер просто не отдаёт то, что было раньше курсора. */
-  function chatMerge(items, isFullSet) {
+  /* outChanges (необязательный) — сюда складывается, ЧТО именно
+     изменилось: { added: [id...], reacted: [id...] }. Нужно, чтобы
+     вызывающий мог отличить «пришло новое сообщение» (лента реально
+     меняется, нужна пересборка) от «на уже известном сообщении
+     поменялись реакции» (достаточно точечно пропатчить один чип).
+     Раньше возвращался просто boolean, и эхо собственной реакции от
+     сервера запускало полную пересборку ленты — прокрутка улетала
+     вниз, лента мерцала. Старые вызовы без третьего аргумента работают
+     ровно как раньше. */
+  function chatMerge(items, isFullSet, outChanges) {
     if (!items) return false;
     var byId = {};
     chatMessages.forEach(function (m) { byId[m.id] = m; });
@@ -1822,6 +1942,7 @@
         chatMessages.push(m);
         byId[m.id] = m;
         changed = true;
+        if (outChanges) outChanges.added.push(m.id);
         /* Видео-карточка в чате — тот же самый ролик, что и в списке
            "N/N" на главной (id видео = id карточки-сообщения, см.
            Storage.chat.sendVideo). Раньше главная страница узнавала о
@@ -1838,6 +1959,7 @@
            реакцию на него. Обновляем на месте, не просто добавляем новые. */
         byId[m.id].reactions = m.reactions;
         changed = true;
+        if (outChanges) outChanges.reacted.push(m.id);
       }
     });
     if (isFullSet) {
@@ -1890,7 +2012,8 @@
       var newFromOthers = items.filter(function (m) {
         return !chatMessages.some(function (x) { return x.id === m.id; }) && m.participantId !== myId;
       });
-      var changed = chatMerge(items, fullPoll);
+      var ch = { added: [], reacted: [] };
+      var changed = chatMerge(items, fullPoll, ch);
 
       /* Курсоры прочитанного — по всем 4 участникам едут вместе с
          сообщениями, отдельного запроса не нужно (см. Storage.chat.fetch).
@@ -1905,8 +2028,18 @@
       if (changed || readChanged) {
         var onChatTab = document.getElementById('v-chat').classList.contains('on');
         if (onChatTab && !document.hidden) {
-          if (changed) { markChatRead(); renderChat(); }
-          else patchReadCounts(); // только счётчики "N/4" — без полной пересборки ленты
+          /* Полная пересборка ленты — только если реально появились
+             новые сообщения (или что-то удалили). Если изменились
+             ТОЛЬКО реакции на уже известных — патчим их точечно: раньше
+             любой такой тик полного опроса (раз в ~32 с) дёргал ленту на
+             ровном месте и ронял прокрутку. */
+          if (ch.added.length || (changed && !ch.reacted.length)) {
+            markChatRead();
+            renderChat();
+          } else {
+            if (ch.reacted.length) ch.reacted.forEach(patchMessageReactions);
+            if (readChanged) patchReadCounts();
+          }
         } else if (newFromOthers.length) {
           bumpChatUnread(newFromOthers.length);
           notifyNewMessages(newFromOthers);
@@ -1983,11 +2116,22 @@
         }
         if (!data.message) return;
         /* chatMerge сама разбирается, новое это сообщение или
-           обновление реакций на уже известном — один и тот же путь
-           для обоих типов событий с бэкенда. */
-        var changed = chatMerge([data.message]);
+           обновление реакций на уже известном — но реагировать на эти
+           два случая надо ПО-РАЗНОМУ. Раньше и то, и другое вело к
+           полной пересборке ленты: поставил реакцию — свой же чип
+           обновился точечно (это чинили в v54), а через долю секунды
+           прилетало эхо от сервера и всё равно пересобирало ленту
+           целиком, роняя прокрутку вниз. Теперь: только реакции —
+           патчим точечно, новое сообщение — полная отрисовка. */
+        var ch = { added: [], reacted: [] };
+        var changed = chatMerge([data.message], false, ch);
         if (!changed) return;
+
         var onChatTab = document.getElementById('v-chat').classList.contains('on');
+        if (!ch.added.length && ch.reacted.length) {
+          if (onChatTab && !document.hidden) ch.reacted.forEach(patchMessageReactions);
+          return;
+        }
         if (onChatTab && !document.hidden) {
           markChatRead();
           renderChat();
@@ -2088,9 +2232,29 @@
     renderChat();
     scrollChatToBottom();
     return Storage.chat.send(myId, text, replyToId, tempId).then(function (msg) {
-      chatMessages = chatMessages.filter(function (m) { return m.id !== tempId; });
-      chatMerge([msg]);
-      renderChat();
+      /* Раньше здесь было: выбросить оптимистичное сообщение, слить
+         пришедшее и позвать renderChat() — то есть ВТОРАЯ полная
+         пересборка ленты сразу после первой (а следом нередко третья,
+         от эха того же сообщения через Centrifugo). Именно это и
+         выглядело как «отправил текст — чат задёргался и замерцал».
+         На деле визуально меняется ровно одна вещь: у своего пузыря
+         пропадает пометка «отправка…». Патчим её на месте.
+
+         id совпадает: clientId, который мы отправили, — это и есть
+         tempId (так сделано ради защиты от дублей, см. v40), поэтому
+         сервер возвращает сообщение с тем же id, и подменять узел в
+         DOM не нужно. */
+      var local = chatMessages.filter(function (x) { return x.id === tempId; })[0];
+      if (!local) { chatMerge([msg]); renderChat(); return; }
+
+      Object.keys(msg).forEach(function (k) { local[k] = msg[k]; });
+      delete local.pending;
+      Storage.chat.writeCache(chatMessages);
+
+      var timeEl = document.querySelector('.msg-row[data-mid="' + tempId + '"] .msg-time-inline');
+      if (timeEl) timeEl.textContent = (msg.at || '').slice(11, 16);
+      patchMessageReactions(tempId);
+      patchReadCounts();
     }).catch(function (e) {
       PCLog.error('Чат: сообщение не отправилось — ' + e.message);
       var m = chatMessages.filter(function (x) { return x.id === tempId; })[0];
@@ -2395,6 +2559,18 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
+    { v: 'v59', items: [
+      'Реакция в середине чата больше не сдвигает картинку: низ остаётся на месте, лента выше уезжает вверх — как в Telegram',
+      'Мини-салют вокруг только что поставленной реакции'
+    ] },
+    { v: 'v58', items: [
+      'Чат перестал дёргаться при отправке сообщения — лента пересобиралась заново до трёх раз подряд, теперь один',
+      'Реакция больше не роняет прокрутку вниз: эхо от сервера перерисовывало всю ленту вместо одного чипа'
+    ] },
+    { v: 'v57', items: [
+      'Видео, закрывающее норму, снова отправляется — вопрос «закрыть день?» открывался под экраном записи, был не виден, и отправка молча вставала',
+      'Повторные нажатия «Отправить» больше не плодят копии видео и сообщений в чат'
+    ] },
     { v: 'v56', items: [
       'Реакции в чате снова работают — из-за испорченной кодировки бэкенд отклонял вообще любую реакцию',
       'Больше не появляются два одинаковых видео: при долгой загрузке с повторами могла стартовать вторая, параллельная'
