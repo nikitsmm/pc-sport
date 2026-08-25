@@ -26,6 +26,13 @@ body{
   overscroll-behavior-y:none;
 }
 button{font:inherit;color:inherit;cursor:pointer;}
+
+/* ---------- заставка при открытии (2 секунды, см. app.js) ---------- */
+#splash-screen{position:fixed;inset:0;z-index:999;background:#000;
+  display:flex;align-items:center;justify-content:center;
+  transition:opacity .35s ease;}
+#splash-screen img{width:100%;height:100%;object-fit:cover;}
+#splash-screen.hide{opacity:0;pointer-events:none;}
 h2{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
    letter-spacing:.2em;text-transform:uppercase;color:var(--steel);margin:0 0 12px;}
 .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;}
@@ -390,7 +397,17 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   height:calc(100vh - var(--header-h));
   height:calc(100dvh - var(--header-h));
   overflow:hidden;
-  background:var(--chat-bg);padding:0;color:var(--chat-text);}
+  /* Фон чата — по прямому запросу, одна картинка на всех. Тёмный
+     градиент поверх (не просто затемняющий фильтр) — чтобы текст
+     сообщений оставался читаемым независимо от того, что на картинке
+     светлое, а что тёмное; сама картинка видна, но приглушённо. */
+  background:linear-gradient(rgba(18,19,22,.86), rgba(18,19,22,.86)), url('icons/chat-bg-papich.jpg') center/cover no-repeat;
+  background-color:var(--chat-bg);
+  padding:0;color:var(--chat-text);}
+/* "Режим Папич" выключен в Настройках — обычный однотонный фон, без
+   картинки. !important — иначе пришлось бы дублировать всю строку
+   выше со всеми свойствами background, только ради одного отличия. */
+body.papich-off .view.on#v-chat{background:var(--chat-bg) !important;}
 /* Пока открыт чат, страница целиком не скроллится — иначе под чатом
    оставалась "губа" из фона body, которую можно было оттянуть. */
 body.chat-open{overflow:hidden;}

@@ -430,15 +430,19 @@
 
           if (onPhase) onPhase('Записываю в общий список видео…');
           var confirmed = true;
+          var confirmResp = null;
           try {
-            await apiRetry(cfg.url, 'confirm_upload', {
+            confirmResp = await apiRetry(cfg.url, 'confirm_upload', {
               participantId: participantId, date: date, videoId: upMeta.videoId, path: upMeta.path, ext: ext,
               size: blob.size, reps: meta.reps || null, thumb: meta.thumb || null
             }, 3);
           } catch (e) { confirmed = false; }
 
           try { await idbDelete(pendingId); } catch (e) {}
-          return { confirmed: confirmed, path: upMeta.path, videoId: upMeta.videoId };
+          /* disk — место на диске виртуалки сразу тем же ответом (см.
+             action_confirm_upload на бэкенде) — чтобы показать коротко
+             в сообщении об успехе загрузки, не делая отдельный запрос. */
+          return { confirmed: confirmed, path: upMeta.path, videoId: upMeta.videoId, disk: confirmResp && confirmResp.disk };
         } finally {
           delete self._inFlight[pendingId];
         }
@@ -483,6 +487,15 @@
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
         return apiRetry(cfg.url, 'cleanup_old', {}, 3);
+      },
+
+      /* Свободное место на диске виртуалки — актуально с переезда видео
+         на своё хранилище (MinIO): место больше не "бесконечное", как
+         было с Yandex, и стоит видеть его прямо в Настройках. */
+      diskUsage: async function () {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        return api(cfg.url, 'get_disk_usage', {});
       },
 
       /* Возвращает { url }. Presigned-ссылка Object Storage — можно

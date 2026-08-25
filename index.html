@@ -18,13 +18,31 @@
      браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
      к уже обновившемуся index.html: получалась смесь старой и новой
      версии, и правки "не доезжали". Меняется вместе с номером версии. -->
-<link rel="stylesheet" href="styles.css?v=54">
+<link rel="stylesheet" href="styles.css?v=60">
 </head>
 <body>
 
+<!-- Заставка при открытии — по прямому запросу, ровно 2 секунды, потом
+     сама убирается (см. #splash-screen в app.js). Прямо в разметке, а
+     не рисуется скриптом — чтобы было видно СРАЗУ, ещё до того, как
+     app.js вообще успел выполниться. -->
+<div id="splash-screen">
+  <img src="icons/splash-papich.jpg" alt="">
+</div>
+<script>
+  /* Не через app.js (он ещё не загрузился к этому моменту) — если
+     "Режим Папич" выключен в Настройках, прячем заставку СРАЗУ, пока
+     страница ещё парсится, чтобы не было даже короткой вспышки
+     картинки перед тем, как её уберёт основной скрипт. */
+  if (localStorage.getItem('pcsport_papich') === '0') {
+    var _splashEl = document.getElementById('splash-screen');
+    if (_splashEl) _splashEl.remove();
+  }
+</script>
+
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v59 · 24.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v60 · 25.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -251,6 +269,14 @@
       <div class="status-line" id="cfg-notify-status"></div>
     </div>
 
+    <h2>Разное</h2>
+    <div class="panel">
+      <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+        <input type="checkbox" id="cfg-papich" style="width:18px;height:18px">
+        <span>Режим Папич (заставка при открытии + фон в чате)</span>
+      </label>
+    </div>
+
     <h2>Что нового</h2>
     <div class="panel" id="cfg-changelog"></div>
 
@@ -299,11 +325,14 @@
       </div>
       <div class="status-line" id="cfg-video-status"></div>
 
-      <p class="h" style="margin-top:16px">Видео хранятся <span id="cfg-retention-days">5</span> дней, потом должны удаляться сами по расписанию (Timer-триггер раз в сутки). Кнопка ниже запускает ту же очистку прямо сейчас — можно своими глазами убедиться, что старое реально удаляется, а не просто верить на слово.</p>
+      <p class="h" style="margin-top:16px">Видео хранятся <span id="cfg-retention-days">5</span> дней, потом должны удаляться сами по расписанию (раз в сутки, ночью). Кнопка ниже запускает ту же очистку прямо сейчас — можно своими глазами убедиться, что старое реально удаляется, а не просто верить на слово.</p>
       <div class="row" style="margin-top:10px;gap:8px">
         <button class="btn ghost" id="cfg-cleanup-now" style="flex:1">Почистить старые видео сейчас</button>
       </div>
       <div class="status-line" id="cfg-cleanup-status"></div>
+
+      <p class="h" style="margin-top:16px">Место на диске (видео хранится на самой виртуалке):</p>
+      <div class="status-line" id="cfg-disk-usage">—</div>
     </div>
 
     <h2>Данные</h2>
@@ -384,9 +413,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js?v=54"></script>
-<script src="video.js?v=54"></script>
-<script src="storage.js?v=54"></script>
-<script src="app.js?v=54"></script>
+<script src="log.js?v=60"></script>
+<script src="video.js?v=60"></script>
+<script src="storage.js?v=60"></script>
+<script src="app.js?v=60"></script>
 </body>
 </html>
