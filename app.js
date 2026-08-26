@@ -2558,6 +2558,106 @@
     box.scrollTop = box.scrollHeight;
   }
 
+  /* Копирование текста в буфер — тот же приём, что и у #log-copy, но
+     переиспользуемый (нужен ещё и диагностике виртуалки). */
+  function copyTextTo(text, statusEl) {
+    var done = function () { statusEl.textContent = 'Скопировано'; statusEl.className = 'status-line ok'; };
+    var fail = function () { statusEl.textContent = 'Не удалось скопировать — выдели текст вручную'; statusEl.className = 'status-line err'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(fail);
+    } else {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        done();
+      } catch (e) { fail(); }
+    }
+  }
+
+  /* ============================================================
+     Диагностика виртуалки — одна кнопка проверяет разом chatstore,
+     Centrifugo, MinIO, место на диске, push-подписки, VAPID — см.
+     action_health_check в backend/app.py. Лог собирается так, чтобы
+     его можно было целиком скопировать и прислать для разбора: не
+     только "ок/не ок" по каждой службе, но и КОНТЕКСТ клиента (версия
+     приложения, какой именно URL бэкенда настроен у этого конкретного
+     человека, идентичность) — путаница "кто на каком бэкенде" уже
+     дважды всплывала вживую при переездах (Cloud Function → своя
+     виртуалка, потом Yandex S3 → MinIO), без этой строки в логе такое
+     приходится выяснять отдельным вопросом.
+
+     Если бэкенд не отвечает вообще (сеть, неверный URL, CORS) —
+     проверка НЕ обрывается молча: это тоже строка в логе, причём
+     первая и самая важная, с настоящим текстом ошибки браузера. */
+  var healthCheckLastText = '';
+
+  function renderHealthLines(lines) {
+    var box = $('#health-check-box');
+    box.hidden = false;
+    box.innerHTML = lines.map(function (l) {
+      return '<div class="' + (l.level === 'error' ? 'lvl-error' : '') + '">' + esc(l.text) + '</div>';
+    }).join('');
+    box.scrollTop = 0;
+    healthCheckLastText = lines.map(function (l) { return l.text; }).join('\n');
+    $('#health-check-actions').hidden = false;
+  }
+
+  function runHealthCheck() {
+    var btn = $('#health-check-run');
+    var statusEl = $('#health-check-status');
+    var box = $('#health-check-box');
+    btn.disabled = true;
+    box.hidden = false;
+    box.innerHTML = '<div style="opacity:.5">Проверяю…</div>';
+    $('#health-check-actions').hidden = true;
+    statusEl.textContent = '';
+    statusEl.className = 'status-line';
+
+    var lines = [];
+    function push(text, level) { lines.push({ text: text, level: level || '' }); }
+
+    push('=== ПЦ Спорт — диагностика виртуалки ===');
+    push('Собрано: ' + new Date().toLocaleString('ru-RU'));
+    push('Версия приложения: ' + ($('#appVersion') ? $('#appVersion').textContent : '?'));
+    var cfg = Storage.config.read();
+    push('Бэкенд: ' + cfg.backend + (cfg.backend === 'cloud' ? ' — ' + (cfg.url || '(URL не задан)') : ''));
+    push('Я (идентичность): ' + (myId() || '(не выбрана)'));
+    push('User-Agent: ' + navigator.userAgent);
+
+    Storage.healthCheck().then(function (r) {
+      push('');
+      push('Время сервера: ' + r.serverTime);
+      push('');
+      push('--- Проверка служб ---');
+      (r.checks || []).forEach(function (c) {
+        push((c.ok ? '✅ ' : '❌ ') + c.name + ' — ' + c.detail + ' (' + c.ms + ' мс)', c.ok ? '' : 'error');
+      });
+      if (r.config) {
+        push('');
+        push('--- Конфигурация бэкенда ---');
+        Object.keys(r.config).forEach(function (k) { push(k + ': ' + r.config[k]); });
+      }
+      push('');
+      push(r.ok ? 'ИТОГ: всё в порядке ✅' : 'ИТОГ: есть проблемы, см. выше ❌', r.ok ? '' : 'error');
+      renderHealthLines(lines);
+      statusEl.textContent = r.ok ? 'Всё в порядке' : 'Есть проблемы';
+      statusEl.className = 'status-line ' + (r.ok ? 'ok' : 'err');
+    }).catch(function (e) {
+      push('');
+      push('❌ НЕ УДАЛОСЬ ПОДКЛЮЧИТЬСЯ К БЭКЕНДУ ВООБЩЕ', 'error');
+      push('Ошибка: ' + e.message, 'error');
+      push('');
+      push('До сервера запрос не дошёл — дальше проверять нечего. Самое');
+      push('вероятное: URL в Настройках указывает не туда, либо нет сети.');
+      renderHealthLines(lines);
+      statusEl.textContent = 'Не удалось подключиться';
+      statusEl.className = 'status-line err';
+    }).then(function () { btn.disabled = false; });
+  }
+
   function renderCfgWho() {
     var host = $('#cfg-who-pick');
     var id = myId();
@@ -2585,12 +2685,8 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v61', items: [
-      'Своё сообщение больше не «зависает» серым после отправки — раньше это проходило только при следующей полной перерисовке чата',
-      'Загрузка видео больше не падает с «сеть прервалась», когда на самом деле всё загрузилось — было в CORS, не в сети',
-      'Сообщения в чате перестали висеть по 5-10 секунд перед отправкой — рассылка push теперь не задерживает ответ',
-      'Заставка при открытии плавно появляется и исчезает, а не всплывает резко',
-      '«Режим Папич» — новые картинки фона и заставки'
+    { v: 'v62', items: [
+      'Настройки → «Диагностика виртуалки»: одна кнопка проверяет чат, реальное время, видео-хранилище, место на диске и push разом, с кнопкой «Скопировать» для лога'
     ] }
   ];
 
@@ -3170,6 +3266,11 @@
     if (bell) {
       bell.addEventListener('click', function () { toggleNotifications(toastStatus()); });
     }
+
+    $('#health-check-run').addEventListener('click', runHealthCheck);
+    $('#health-check-copy').addEventListener('click', function () {
+      copyTextTo(healthCheckLastText || '(лог ещё не собирался)', $('#health-check-status'));
+    });
 
     $('#log-copy').addEventListener('click', function () {
       var text = PCLog.asText() || '(логов пока нет)';

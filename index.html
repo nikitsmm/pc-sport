@@ -18,7 +18,7 @@
      браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
      к уже обновившемуся index.html: получалась смесь старой и новой
      версии, и правки "не доезжали". Меняется вместе с номером версии. -->
-<link rel="stylesheet" href="styles.css?v=61">
+<link rel="stylesheet" href="styles.css?v=62">
 </head>
 <body>
 
@@ -42,7 +42,7 @@
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v61 · 26.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v62 · 26.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -346,6 +346,17 @@
       <p class="h" id="cfg-version">—</p>
     </div>
 
+    <h2>Диагностика виртуалки</h2>
+    <div class="panel">
+      <p class="h" style="margin:0 0 10px">Проверяет разом всё, что держит приложение на ходу: чат, реальное время, видео-хранилище, место на диске, push. Если что-то не работает — жми, копируй результат и присылай, вместо скриншота.</p>
+      <button class="btn" id="health-check-run" style="width:100%">Проверить всё</button>
+      <div class="log-box" id="health-check-box" hidden></div>
+      <div class="row" style="margin-top:10px;gap:8px" id="health-check-actions" hidden>
+        <button class="btn ghost" id="health-check-copy" style="flex:1">Скопировать</button>
+      </div>
+      <div class="status-line" id="health-check-status"></div>
+    </div>
+
     <h2>Логи</h2>
     <div class="panel">
       <p class="h" style="margin:0 0 10px">Если что-то не работает — скопируй и пришли эти строки, так проще найти причину, чем по скриншоту.</p>
@@ -413,9 +424,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js?v=61"></script>
-<script src="video.js?v=61"></script>
-<script src="storage.js?v=61"></script>
-<script src="app.js?v=61"></script>
+<script src="log.js?v=62"></script>
+<script src="video.js?v=62"></script>
+<script src="storage.js?v=62"></script>
+<script src="app.js?v=62"></script>
 </body>
 </html>
