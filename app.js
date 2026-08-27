@@ -1635,6 +1635,130 @@
     return '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + (m.pending ? ' · отправка…' : '') + '</span></div>';
   }
 
+  /* Разметка ОДНОГО сообщения — вынесена из renderChat() (была прямо
+     внутри .map()), чтобы её же мог использовать appendNewMessages()
+     ниже: он добавляет в конец ленты только реально новые сообщения,
+     не трогая уже отрисованные — раньше ЛЮБОЕ новое сообщение (в том
+     числе от других участников, не только своё) вызывало renderChat()
+     целиком, а это заново создавало ВСЕ теги <img>/<video> в чате —
+     визуально это и была та самая "рябь"/мерцание всей ленты на каждое
+     чужое сообщение, отдельно от уже починенных (v54/v58) дёрганий из-за
+     реакций и прокрутки. myIdVal/divider передаются явно (не через
+     Storage.identity.read()/computeUnreadDivider() внутри) — при
+     точечном добавлении их незачем вычислять заново на каждое сообщение. */
+  function buildMessageRowHtml(m, i, myIdVal, divider, lastDayHolder) {
+    var day = m.at ? m.at.slice(0, 10) : '';
+    var sep = '';
+    if (day && day !== lastDayHolder.value) { sep = '<div class="chat-day">' + shortDate(day) + '</div>'; lastDayHolder.value = day; }
+    if (divider && m.id === divider.beforeId) {
+      sep += '<div class="chat-unread-divider">▲ ' + divider.count + ' ' + plural(divider.count, 'новое', 'новых', 'новых') + '</div>';
+    }
+
+    var mine = m.participantId === myIdVal;
+    var isGroupStart = i === 0 || !sameGroup(chatMessages[i - 1], m);
+    var isGroupEnd = i === chatMessages.length - 1 || !sameGroup(m, chatMessages[i + 1]);
+    var time = formatLocalTime(m.at);
+    if (mine && !m.pending && m.seq) time += renderReadCount(m);
+
+    var avatarHtml = mine ? '' : (isGroupEnd
+      ? '<div class="msg-avatar" style="background:' + participantColor(m.participantId) + '">' + participantInitial(m.participantId) + '</div>'
+      : '<div class="avatar-spacer"></div>');
+    var senderHtml = (isGroupStart && !mine)
+      ? '<div class="msg-sender-inline" style="color:' + participantColor(m.participantId) + '">' + esc(participantName(m.participantId)) + '</div>'
+      : '';
+
+    var selected = !!selectedIds[m.id];
+    var checkHtml = (selectMode && !m.pending) ? '<div class="msg-select-check' + (selected ? ' checked' : '') + '"></div>' : '';
+
+    var rowCls = 'msg-row' + (mine ? ' mine' : '') + (isGroupStart ? ' group-start' : '') + (selected ? ' selected' : '');
+    var bubbleCls = 'bubble' + (mine ? ' out' : ' in') + (m.pending ? ' pending' : '');
+
+    return sep +
+      '<div class="' + rowCls + '" id="msg-' + m.id + '" data-mid="' + m.id + '">' + checkHtml + avatarHtml +
+        '<div class="msg-col">' +
+          '<div class="' + bubbleCls + '" data-mid="' + m.id + '">' + senderHtml + renderReplyQuote(m) + renderMessageBody(m, time) + '</div>' +
+          (m.pending ? '' : renderReactions(m)) +
+        '</div>' +
+      '</div>';
+  }
+
+  /* Навешивает на один свежедобавленный <div class="msg-row"> ровно те
+     же обработчики, что renderChat() навешивает при полной пересборке
+     (реакции/цитата-ответ/тап-меню/картинки) — но только на НЕГО, а не
+     на весь лог заново. */
+  function wireOneMessageRow(row, m) {
+    if (!row) return;
+    row.querySelectorAll('.reply-quote[data-scrollto]').forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation();
+        var target = document.getElementById('msg-' + b.dataset.scrollto);
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('flash');
+        setTimeout(function () { target.classList.remove('flash'); }, 900);
+      });
+    });
+    loadChatImages(row);
+    row.querySelectorAll('.react-pill').forEach(wireReactPill);
+    if (!m.pending) {
+      var bubbleEl = row.querySelector('.bubble');
+      wireMessagePress(row, bubbleEl, m);
+    }
+  }
+
+  /* Точечное добавление НОВЫХ сообщений в конец уже показанной ленты —
+     без полной пересборки innerHTML. Работает только для самого частого
+     случая: сообщения реально новые и идут строго в конце chatMessages
+     (обычный порядок доставки, и через опрос, и через Centrifugo). Если
+     что-то не сходится (не найден предыдущий элемент, юзер листает
+     историю сильно вверх и т.п.) — тихо откатывается на обычный
+     renderChat(), чтобы никогда не оставить ленту в противоречивом виде. */
+  function appendNewMessages(newMsgs) {
+    var log = $('#chat-log');
+    if (!log || !newMsgs.length) return false;
+
+    var startIdx = chatMessages.length - newMsgs.length;
+    for (var k = 0; k < newMsgs.length; k++) {
+      if (chatMessages[startIdx + k] !== newMsgs[k]) return false; // не в самом конце — надёжнее полный рендер
+    }
+
+    var myIdVal = myId();
+    var chatElForBottom = $('#chat-log');
+    var wasAtBottom = chatElForBottom
+      ? (chatElForBottom.scrollHeight - chatElForBottom.scrollTop - chatElForBottom.clientHeight) < 80
+      : true;
+
+    /* Если предыдущее последнее сообщение группировалось с новым (тот
+       же автор, в пределах GROUP_GAP_MS) — у него раньше стоял аватар
+       (он был концом группы), а теперь он больше не последний в группе,
+       аватар нужно превратить в невидимый спейсер, иначе будет два
+       аватара подряд, как будто это разные "пачки". Своих сообщений
+       (mine) это не касается — у них аватара нет вообще. */
+    var prevMsg = startIdx > 0 ? chatMessages[startIdx - 1] : null;
+    if (prevMsg && prevMsg.participantId !== myIdVal && sameGroup(prevMsg, newMsgs[0])) {
+      var prevAvatar = document.querySelector('.msg-row[data-mid="' + prevMsg.id + '"] .msg-avatar');
+      if (prevAvatar) {
+        var spacer = document.createElement('div');
+        spacer.className = 'avatar-spacer';
+        prevAvatar.replaceWith(spacer);
+      }
+    }
+
+    var lastDayHolder = { value: prevMsg && prevMsg.at ? prevMsg.at.slice(0, 10) : '' };
+    var divider = computeUnreadDivider(myIdVal); // новым сообщениям делитель не нужен, но сигнатура функции общая
+    var html = '';
+    for (var i = 0; i < newMsgs.length; i++) {
+      html += buildMessageRowHtml(newMsgs[i], startIdx + i, myIdVal, divider, lastDayHolder);
+    }
+    log.insertAdjacentHTML('beforeend', html);
+    newMsgs.forEach(function (m) { wireOneMessageRow(document.querySelector('.msg-row[data-mid="' + m.id + '"]'), m); });
+
+    if (wasAtBottom) scrollChatToBottom();
+    renderSelectBar();
+    updateScrollBottomBtn();
+    return true;
+  }
+
   function renderChat() {
     var myId = Storage.identity.read();
     var known = state.participants.some(function (p) { return p.id === myId; });
@@ -1660,71 +1784,19 @@
 
     log.classList.toggle('selecting', selectMode);
 
-    var lastDay = '';
+    var lastDayHolder = { value: '' };
     log.innerHTML = chatMessages.map(function (m, i) {
-      var day = m.at ? m.at.slice(0, 10) : '';
-      var sep = '';
-      if (day && day !== lastDay) { sep = '<div class="chat-day">' + shortDate(day) + '</div>'; lastDay = day; }
-      if (divider && m.id === divider.beforeId) {
-        sep += '<div class="chat-unread-divider">▲ ' + divider.count + ' ' + plural(divider.count, 'новое', 'новых', 'новых') + '</div>';
-      }
-
-      var mine = m.participantId === myId;
-      var isGroupStart = i === 0 || !sameGroup(chatMessages[i - 1], m);
-      var isGroupEnd = i === chatMessages.length - 1 || !sameGroup(m, chatMessages[i + 1]);
-      var time = formatLocalTime(m.at);
-      if (mine && !m.pending && m.seq) time += renderReadCount(m);
-
-      var avatarHtml = mine ? '' : (isGroupEnd
-        ? '<div class="msg-avatar" style="background:' + participantColor(m.participantId) + '">' + participantInitial(m.participantId) + '</div>'
-        : '<div class="avatar-spacer"></div>');
-      var senderHtml = (isGroupStart && !mine)
-        ? '<div class="msg-sender-inline" style="color:' + participantColor(m.participantId) + '">' + esc(participantName(m.participantId)) + '</div>'
-        : '';
-
-      var selected = !!selectedIds[m.id];
-      var checkHtml = (selectMode && !m.pending) ? '<div class="msg-select-check' + (selected ? ' checked' : '') + '"></div>' : '';
-
-      var rowCls = 'msg-row' + (mine ? ' mine' : '') + (isGroupStart ? ' group-start' : '') + (selected ? ' selected' : '');
-      var bubbleCls = 'bubble' + (mine ? ' out' : ' in') + (m.pending ? ' pending' : '');
-
-      return sep +
-        '<div class="' + rowCls + '" id="msg-' + m.id + '" data-mid="' + m.id + '">' + checkHtml + avatarHtml +
-          '<div class="msg-col">' +
-            '<div class="' + bubbleCls + '" data-mid="' + m.id + '">' + senderHtml + renderReplyQuote(m) + renderMessageBody(m, time) + '</div>' +
-            (m.pending ? '' : renderReactions(m)) +
-          '</div>' +
-        '</div>';
+      return buildMessageRowHtml(m, i, myId, divider, lastDayHolder);
     }).join('');
-
-    log.querySelectorAll('.reply-quote[data-scrollto]').forEach(function (b) {
-      b.addEventListener('click', function (e) {
-        e.stopPropagation();
-        var target = document.getElementById('msg-' + b.dataset.scrollto);
-        if (!target) return;
-        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        target.classList.add('flash');
-        setTimeout(function () { target.classList.remove('flash'); }, 900);
-      });
-    });
 
     /* Открытие видео/фото/файла теперь целиком идёт через
        wireMessagePress ниже (единая логика короткий тап/зажатие для
        всех вложений) — отдельного click-слушателя на [data-play] тут
        больше нет, иначе клик срабатывал бы дважды. */
-    loadChatImages(log);
-
-    log.querySelectorAll('.react-pill').forEach(wireReactPill);
-
-    /* Тап по строке — либо переключает выбор (в режиме выбора), либо
-       открывает меню действий. Зажатие (долгий тап) на пузыре сразу
-       включает режим выбора, минуя меню — так же, как в референсе. */
     log.querySelectorAll('.msg-row[data-mid]').forEach(function (row) {
       var mid = row.dataset.mid;
       var mObj = chatMessages.filter(function (x) { return x.id === mid; })[0];
-      if (!mObj || mObj.pending) return;
-      var bubbleEl = row.querySelector('.bubble');
-      wireMessagePress(row, bubbleEl, mObj);
+      if (mObj) wireOneMessageRow(row, mObj);
     });
 
     /* Не голый window.scrollTo сразу здесь — document.body.scrollHeight
@@ -2042,7 +2114,12 @@
       /* m.pending — сообщение ещё в процессе собственной отправки,
          сервер о нём знать не может, не трогаем. */
       chatMessages = chatMessages.filter(function (m) { return m.pending || serverIds[m.id]; });
-      if (chatMessages.length !== before) changed = true;
+      if (chatMessages.length !== before) {
+        changed = true;
+        // кто-то пропал из ленты (удалили сообщение) — для appendNewMessages()
+        // это уже не "просто добавить в конец", нужна полная пересборка
+        if (outChanges) outChanges.removed = true;
+      }
     }
     if (changed) {
       chatMessages.sort(function (a, b) { return (a.at || '') < (b.at || '') ? -1 : 1; });
@@ -2101,12 +2178,22 @@
       if (changed || readChanged) {
         var onChatTab = document.getElementById('v-chat').classList.contains('on');
         if (onChatTab && !document.hidden) {
-          /* Полная пересборка ленты — только если реально появились
-             новые сообщения (или что-то удалили). Если изменились
-             ТОЛЬКО реакции на уже известных — патчим их точечно: раньше
-             любой такой тик полного опроса (раз в ~32 с) дёргал ленту на
-             ровном месте и ронял прокрутку. */
-          if (ch.added.length || (changed && !ch.reacted.length)) {
+          /* Появились новые сообщения, и ничего при этом не удалялось —
+             самый частый случай (кто-то написал, пока чат открыт у
+             остальных). Точечно дописываем их в конец, без пересборки
+             всей ленты (см. appendNewMessages) — раньше ЛЮБОЕ чужое
+             сообщение вызывало renderChat() целиком, что заново
+             создавало все <img>/<video> в чате и визуально "мигало".
+             Если добавление почему-то не удалось (сообщения оказались
+             не строго в конце и т.п.) — appendNewMessages сама вернёт
+             false, и ниже сработает обычный полный renderChat(). */
+          if (ch.added.length && !ch.removed) {
+            markChatRead();
+            var newMsgObjs = ch.added.map(function (id) {
+              return chatMessages.filter(function (x) { return x.id === id; })[0];
+            }).filter(Boolean);
+            if (!appendNewMessages(newMsgObjs)) renderChat();
+          } else if (ch.added.length || (changed && !ch.reacted.length)) {
             markChatRead();
             renderChat();
           } else {
@@ -2207,7 +2294,11 @@
         }
         if (onChatTab && !document.hidden) {
           markChatRead();
-          renderChat();
+          /* Один новый message по realtime — самый частый и самый
+             "живой" случай (кто-то только что написал, пока ты смотришь
+             в чат). Точечно дописываем в конец, не пересобираем весь
+             лог — см. appendNewMessages() и её комментарий. */
+          if (!appendNewMessages([data.message])) renderChat();
         } else if (data.message.participantId !== myIdVal) {
           bumpChatUnread(1);
           notifyNewMessages([data.message]);
@@ -2752,8 +2843,8 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v63', items: [
-      'При записи видео теперь обратный отсчёт 10…1 перед стартом — как штатный «Таймер» в камере iPhone; повторный тап по кнопке во время отсчёта отменяет запись'
+    { v: 'v64', items: [
+      'Чат больше не дёргается и не мигает, когда кто-то пишет — раньше ЛЮБОЕ новое сообщение (даже чужое) пересобирало всю ленту заново, из-за чего все картинки и видео в чате на миг мигали; теперь новое сообщение просто дописывается в конец'
     ] }
   ];
 
