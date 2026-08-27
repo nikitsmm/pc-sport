@@ -627,6 +627,7 @@
 
   function closeRecorder() {
     if (recSession) {
+      cancelRecordingCountdown(); // иначе таймер мог бы дозвонить и стартовать запись уже после закрытия
       if (recSession.ctrl) recSession.ctrl.stop();
       PCVideo.closeCamera(recSession.stream);
     }
@@ -640,13 +641,79 @@
     b.classList.remove('active');
   }
 
+  /* Обратный отсчёт 10…1 перед стартом записи — по образцу штатного
+     "Таймера" в камере iPhone. Камера уже работает и показывает
+     картинку всё это время (см. openRecorder/openCamera) — отсчёт
+     только откладывает МОМЕНТ вызова PCVideo.startRecording, ничего
+     больше не меняет в самой логике записи/загрузки. Повторный тап по
+     кнопке во время отсчёта — отмена (как и на iPhone), а не игнор. */
+  var RECORD_COUNTDOWN_SECONDS = 10;
+
+  function cancelRecordingCountdown() {
+    if (recSession && recSession.countdownTimer) {
+      clearInterval(recSession.countdownTimer);
+      recSession.countdownTimer = null;
+    }
+    var el = $('#rec-countdown');
+    if (el) el.hidden = true;
+  }
+
+  function startRecordingCountdown() {
+    $('#rec-toggle').textContent = '✕ Отмена';
+    $('#rec-flip').disabled = true;
+    $('#rec-gallery').disabled = true;
+    $('#rec-settings-row').hidden = true;
+
+    var el = $('#rec-countdown');
+    var n = RECORD_COUNTDOWN_SECONDS;
+    el.textContent = n;
+    el.hidden = false;
+
+    recSession.countdownTimer = setInterval(function () {
+      // recSession мог стать null, если оверлей закрыли между тиками
+      // (closeRecorder уже вызвал cancelRecordingCountdown и снял
+      // интервал — но лишняя проверка ничего не стоит и подстраховывает
+      // от любых будущих путей закрытия, которые могли бы забыть это сделать)
+      if (!recSession) return;
+      n--;
+      if (n <= 0) {
+        clearInterval(recSession.countdownTimer);
+        recSession.countdownTimer = null;
+        el.hidden = true;
+        beginRecordingNow();
+        return;
+      }
+      el.textContent = n;
+    }, 1000);
+  }
+
   function toggleRecordingUI() {
     if (!recSession || !recSession.stream) return;
     if (recSession.recording) {
       if (recSession.ctrl) recSession.ctrl.stop();
       return;
     }
+    if (recSession.countdownTimer) {
+      // повторный тап во время отсчёта — отмена, возврат к обычному
+      // состоянию "готов снимать", как будто отсчёт и не начинался
+      cancelRecordingCountdown();
+      setToggleIdle();
+      $('#rec-flip').disabled = false;
+      $('#rec-gallery').disabled = false;
+      $('#rec-settings-row').hidden = false;
+      return;
+    }
+    startRecordingCountdown();
+  }
+
+  /* То же самое, что раньше делала toggleRecordingUI() сразу по тапу —
+     теперь вызывается либо по окончании отсчёта, либо (когда отсчёт
+     когда-нибудь захотят убрать/обойти) можно звать напрямую. Логика
+     самой записи/сохранения НЕ менялась ни на строчку. */
+  function beginRecordingNow() {
+    if (!recSession) return;
     recSession.recording = true;
+    setToggleIdle(); // тот же текст "● Запись", кнопка снова означает "Стоп" по нажатию — как и было
     $('#rec-toggle').classList.add('active');
     $('#rec-flip').disabled = true;
     $('#rec-gallery').disabled = true;
@@ -2685,8 +2752,8 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v62', items: [
-      'Настройки → «Диагностика виртуалки»: одна кнопка проверяет чат, реальное время, видео-хранилище, место на диске и push разом, с кнопкой «Скопировать» для лога'
+    { v: 'v63', items: [
+      'При записи видео теперь обратный отсчёт 10…1 перед стартом — как штатный «Таймер» в камере iPhone; повторный тап по кнопке во время отсчёта отменяет запись'
     ] }
   ];
 

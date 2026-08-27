@@ -18,7 +18,7 @@
      браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
      к уже обновившемуся index.html: получалась смесь старой и новой
      версии, и правки "не доезжали". Меняется вместе с номером версии. -->
-<link rel="stylesheet" href="styles.css?v=62">
+<link rel="stylesheet" href="styles.css?v=63">
 </head>
 <body>
 
@@ -42,7 +42,7 @@
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v62 · 26.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v63 · 26.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -387,6 +387,11 @@
       <video id="rec-live" autoplay muted playsinline></video>
       <video id="rec-preview" playsinline controls hidden></video>
       <div class="rec-timer" id="rec-timer" hidden></div>
+      <!-- Обратный отсчёт перед стартом записи — по образцу "Таймер" в
+           штатной камере iPhone: крупные цифры поверх картинки, запись
+           реально начинается только когда долистает до нуля (см.
+           startRecordingCountdown() в app.js). -->
+      <div class="rec-countdown" id="rec-countdown" hidden></div>
     </div>
     <div class="rec-msg" id="rec-msg"></div>
     <div class="rec-controls" id="rec-live-controls">
@@ -424,9 +429,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js?v=62"></script>
-<script src="video.js?v=62"></script>
-<script src="storage.js?v=62"></script>
-<script src="app.js?v=62"></script>
+<script src="log.js?v=63"></script>
+<script src="video.js?v=63"></script>
+<script src="storage.js?v=63"></script>
+<script src="app.js?v=63"></script>
 </body>
 </html>
