@@ -65,24 +65,74 @@
      POST { action, ...params } → JSON. Никаких заголовков авторизации,
      функция сама решает, кому доверять (см. backend/index.py).
      ============================================================ */
+  /* Таймаут на сам запрос — 20 сек. Без него "зависший" запрос на плохой
+     мобильной сети мог висеть сколь угодно долго (браузер сам иногда
+     ждёт TCP-таймаут по 30-60 сек), и человек просто не понимал, что
+     происходит — ни ошибки, ни результата. AbortController обрывает его
+     сами и даёт понятную причину ("не ответил за 20с" — это отдельная,
+     значимая информация: отличает "сервер вообще не виден" от "запрос
+     завис на середине", см. подробный лог ниже). */
+  var API_TIMEOUT_MS = 20000;
+
+  /* 28.08.2026 — живой случай: у части команды рвётся мобильный интернет
+     (Казань/Чебоксары, судя по всему — не блокировка целиком, а именно
+     потеря пакетов/нестабильность на уровне оператора), из-за чего чат
+     и видео не грузились, хотя сама виртуалка была полностью жива.
+     Раньше лог показывал только "Load failed"/"Failed to fetch" — общую
+     фразу браузера, из которой не понять, было ли это: таймаут,
+     обрыв на середине ответа, реально нет сети на телефоне, или что-то
+     ещё. Расширенный лог ниже добавляет ровно то, что нужно для
+     удалённой диагностики без доступа к телефону: время до сбоя,
+     таймаут это или мгновенный отказ, navigator.onLine, и тип
+     соединения (2g/3g/4g, скорость), если браузер его отдаёт (Chrome —
+     да, Safari/iOS — нет такого API вообще, там будет "недоступно"). */
+  function _networkContext() {
+    var conn = global.navigator && (navigator.connection || navigator.mozConnection || navigator.webkitConnection);
+    return {
+      online: (global.navigator && 'onLine' in navigator) ? navigator.onLine : 'н/д',
+      connType: conn ? (conn.effectiveType || 'н/д') : 'н/д (нет Network Information API — обычно Safari/iOS)',
+      downlinkMbps: conn && typeof conn.downlink === 'number' ? conn.downlink : 'н/д',
+      rttMs: conn && typeof conn.rtt === 'number' ? conn.rtt : 'н/д'
+    };
+  }
+
   async function api(url, action, params) {
     if (!url) throw new Error('Не задан URL облачной функции');
     var res;
+    var t0 = Date.now();
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, API_TIMEOUT_MS) : null;
     try {
       res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({ action: action }, params || {}))
+        body: JSON.stringify(Object.assign({ action: action }, params || {})),
+        signal: ctrl ? ctrl.signal : undefined
       });
     } catch (netErr) {
-      if (global.PCLog) PCLog.error('api(' + action + '): сеть — ' + netErr.message);
-      throw new Error('Нет связи с функцией: ' + netErr.message);
+      var elapsed = Date.now() - t0;
+      var isTimeout = netErr && netErr.name === 'AbortError';
+      var net = _networkContext();
+      if (global.PCLog) {
+        PCLog.error(
+          'api(' + action + '): сеть — ' + (isTimeout ? 'таймаут (не ответил ' + Math.round(elapsed / 1000) + 'с)' : netErr.message) +
+          ' | прошло: ' + elapsed + 'мс' +
+          ' | onLine: ' + net.online +
+          ' | связь: ' + net.connType +
+          (net.downlinkMbps !== 'н/д' ? ' (' + net.downlinkMbps + 'Мбит/с, ping ' + net.rttMs + 'мс)' : '')
+        );
+      }
+      throw new Error(isTimeout
+        ? 'Сервер не ответил за ' + Math.round(elapsed / 1000) + 'с — похоже на нестабильную сеть, а не на сбой сервера'
+        : 'Нет связи с функцией: ' + netErr.message);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
     var data = {};
     try { data = await res.json(); } catch (e) {}
     if (!res.ok || data.error) {
       var msg = data.error_description || data.error || ('HTTP ' + res.status);
-      if (global.PCLog) PCLog.error('api(' + action + '): ' + msg);
+      if (global.PCLog) PCLog.error('api(' + action + '): ' + msg + ' | прошло: ' + (Date.now() - t0) + 'мс');
       throw new Error(msg);
     }
     return data;
@@ -119,7 +169,13 @@
     var lastErr;
     for (var i = 0; i < attempts; i++) {
       try { return await api(url, action, params); }
-      catch (e) { lastErr = e; if (i < attempts - 1) await wait(800 * (i + 1)); }
+      catch (e) {
+        lastErr = e;
+        if (i < attempts - 1) {
+          if (global.PCLog) PCLog.warn('apiRetry(' + action + '): попытка ' + (i + 1) + '/' + attempts + ' не удалась, пробую снова через ' + (800 * (i + 1)) + 'мс');
+          await wait(800 * (i + 1));
+        }
+      }
     }
     throw lastErr;
   }
@@ -247,23 +303,33 @@
       return api(cfg.url, 'health_check', {});
     },
 
-    /* Забрать состояние из облака. Возвращает состояние или null. */
+    /* Забрать состояние из облака. Возвращает состояние или null.
+       apiRetry — 28.08.2026, тот же случай с рваной мобильной сетью
+       (см. комментарий у api() в начале файла): это САМЫЙ частый вызов
+       во всём приложении (перед каждой отметкой дня, при каждом
+       возврате в приложение) — один потерянный пакет раньше означал
+       "норма не сохранилась", хотя и сеть, и сервер были в порядке. */
     pull: async function () {
       var cfg = Config.read();
       if (cfg.backend !== 'cloud' || !cfg.url) return null;
-      var data = await api(cfg.url, 'get_state', {});
+      var data = await apiRetry(cfg.url, 'get_state', {}, 3);
       checkClockSkew(data && data.serverTime);
       var remote = data && data.state ? data.state : null;
       if (remote) this.writeLocal(remote);
       return remote;
     },
 
-    /* Отправить состояние в облако. Тихо выходит, если облако не настроено. */
+    /* Отправить состояние в облако. Тихо выходит, если облако не настроено.
+       apiRetry — та же причина, что у pull() выше. Безопасно повторять:
+       save_state полностью перезаписывает СВОЙ же только что посчитанный
+       (после pull+merge) объект — повторная отправка того же самого
+       state ничего не портит, это не "ещё одно" действие, а идемпотентная
+       запись одного и того же снимка. */
     push: async function (state) {
       this.writeLocal(state);
       var cfg = Config.read();
       if (cfg.backend !== 'cloud' || !cfg.url) return { synced: false };
-      await api(cfg.url, 'save_state', { state: state });
+      await apiRetry(cfg.url, 'save_state', { state: state }, 3);
       return { synced: true, at: new Date().toISOString() };
     },
 
@@ -421,7 +487,12 @@
             });
           } catch (e) { /* IndexedDB недоступен — грузим без страховки на закрытие приложения */ }
 
-          var upMeta = await api(cfg.url, 'get_upload_url', { participantId: participantId, date: date, ext: ext });
+          // apiRetry — та же причина, что у playUrl/attachmentUrl (см.
+          // комментарии там): на рваной мобильной сети один потерянный
+          // запрос не должен значить "не могу начать загрузку видео".
+          // Безопасно повторять — сервер просто выдаёт новую presigned-
+          // ссылку на каждый вызов, реальная загрузка ещё не началась.
+          var upMeta = await apiRetry(cfg.url, 'get_upload_url', { participantId: participantId, date: date, ext: ext }, 3);
 
           var attempts = 3, lastErr = null;
           for (var i = 0; i < attempts; i++) {
@@ -510,11 +581,19 @@
       },
 
       /* Возвращает { url }. Presigned-ссылка Object Storage — можно
-         сразу отдавать в <video src>, Range поддерживается штатно. */
+         сразу отдавать в <video src>, Range поддерживается штатно.
+
+         apiRetry, не голый api() — 28.08.2026 поймали живьём на рваном
+         мобильном интернете (Казань/Чебоксары): сама виртуалка была
+         полностью жива (диагностика в итоге проходила), просто отдельные
+         запросы рвались на плохой сети ("Load failed" на iOS) — а тут
+         раньше был ровно один заход без повтора, поэтому один потерянный
+         пакет означал "видео не грузится", хотя сеть и сервер оба
+         в порядке, просто не с первого раза. */
       playUrl: async function (path) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
-        var d = await api(cfg.url, 'get_download_url', { path: path });
+        var d = await apiRetry(cfg.url, 'get_download_url', { path: path }, 3);
         return { url: d.url };
       },
 
@@ -701,9 +780,11 @@
           throw new Error('Файлы можно отправлять только при включённой облачной синхронизации');
         }
         var ext = (file.name || '').split('.').pop() || 'bin';
-        var upMeta = await api(cfg.url, 'get_attachment_upload_url', {
+        // apiRetry — как и ниже для самого PUT: см. пояснение в комментарии
+        // над ним про рваную мобильную сеть этой четвёрки.
+        var upMeta = await apiRetry(cfg.url, 'get_attachment_upload_url', {
           participantId: participantId, ext: ext, size: file.size
-        });
+        }, 3);
 
         /* Тот же 3-попыточный повтор с паузой, что и у видео (см.
            Storage.video.upload) — мобильная сеть у этой четвёрки рвётся
@@ -739,11 +820,12 @@
 
       /* Presigned-ссылка на просмотр/скачивание — та же механика, что и
          у видео (Storage.video.playUrl), только путь общий для видео И
-         вложений (см. action_get_download_url в backend/index.py). */
+         вложений (см. action_get_download_url в backend/index.py).
+         apiRetry — та же причина, см. комментарий у playUrl выше. */
       attachmentUrl: async function (path) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
-        var d = await api(cfg.url, 'get_download_url', { path: path });
+        var d = await apiRetry(cfg.url, 'get_download_url', { path: path }, 3);
         return d.url;
       },
 

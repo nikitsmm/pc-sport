@@ -7,18 +7,18 @@
    телефон в сети, всегда грузится свежее; кэш нужен только когда сети
    вообще нет. */
 
-var CACHE = 'pcsport-v64';
+var CACHE = 'pcsport-v66';
 /* С ?v= — теми же адресами, какими их запрашивает index.html (см.
    комментарий там). Без совпадения адресов офлайн-кэш просто не нашёлся
    бы по запрошенному URL. */
 var SHELL = [
   './',
   'index.html',
-  'styles.css?v=64',
-  'app.js?v=64',
-  'storage.js?v=64',
-  'video.js?v=64',
-  'log.js?v=64',
+  'styles.css?v=66',
+  'app.js?v=66',
+  'storage.js?v=66',
+  'video.js?v=66',
+  'log.js?v=66',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

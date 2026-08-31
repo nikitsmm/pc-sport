@@ -18,7 +18,7 @@
      браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
      к уже обновившемуся index.html: получалась смесь старой и новой
      версии, и правки "не доезжали". Меняется вместе с номером версии. -->
-<link rel="stylesheet" href="styles.css?v=64">
+<link rel="stylesheet" href="styles.css?v=66">
 </head>
 <body>
 
@@ -42,7 +42,7 @@
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v64 · 27.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v66 · 31.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -381,6 +381,10 @@
     <div class="rec-limit-warn">⏱ Максимум 1 минута на ролик</div>
     <div class="rec-settings-row" id="rec-settings-row">
       <button class="rec-mic-btn on" id="rec-mic" title="Звук">🎤 Звук: вкл</button>
+      <!-- Обратный отсчёт перед стартом записи — необязательный,
+           переключатель прямо тут же, в меню съёмки (а не в Настройках,
+           которые для этого экрана далеко) — по прямому запросу. -->
+      <button class="rec-mic-btn" id="rec-timer-toggle" title="Обратный отсчёт перед записью">⏱ Таймер: выкл</button>
       <div class="rec-quality-pick" id="rec-quality-pick"></div>
     </div>
     <div class="rec-stage">
@@ -429,9 +433,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js?v=64"></script>
-<script src="video.js?v=64"></script>
-<script src="storage.js?v=64"></script>
-<script src="app.js?v=64"></script>
+<script src="log.js?v=66"></script>
+<script src="video.js?v=66"></script>
+<script src="storage.js?v=66"></script>
+<script src="app.js?v=66"></script>
 </body>
 </html>

@@ -611,6 +611,7 @@
     $('#rec-mic').classList.remove('off');
     $('#rec-mic').textContent = '🎤 Звук: вкл';
     renderQualityPicker();
+    renderRecTimerToggle();
 
     $('#recOverlay').classList.add('on');
 
@@ -641,13 +642,33 @@
     b.classList.remove('active');
   }
 
-  /* Обратный отсчёт 10…1 перед стартом записи — по образцу штатного
+  /* Обратный отсчёт 5…1 перед стартом записи — по образцу штатного
      "Таймера" в камере iPhone. Камера уже работает и показывает
      картинку всё это время (см. openRecorder/openCamera) — отсчёт
      только откладывает МОМЕНТ вызова PCVideo.startRecording, ничего
      больше не меняет в самой логике записи/загрузки. Повторный тап по
-     кнопке во время отсчёта — отмена (как и на iPhone), а не игнор. */
-  var RECORD_COUNTDOWN_SECONDS = 10;
+     кнопке во время отсчёта — отмена (как и на iPhone), а не игнор.
+
+     Необязательный — по умолчанию ВЫКЛЮЧЕН (localStorage-флаг, per-device,
+     тот же принцип, что и "Режим Папич"): большинство просто жмут
+     запись сразу, отсчёт нужен не всем и не всегда. Переключатель —
+     прямо в самом меню съёмки (см. #rec-timer-toggle), не в Настройках:
+     нужен именно в моменте, когда снимаешь, незачем идти за ним на
+     другой экран. */
+  var RECORD_COUNTDOWN_SECONDS = 5;
+  var RECORD_TIMER_KEY = 'pcsport_rec_timer';
+  function recordTimerEnabled() { return localStorage.getItem(RECORD_TIMER_KEY) === '1'; }
+
+  function renderRecTimerToggle() {
+    var btn = $('#rec-timer-toggle');
+    if (!btn) return;
+    var on = recordTimerEnabled();
+    // .rec-mic-btn (переиспользуем стиль кнопки звука) — залитый вид по
+    // умолчанию, класс .off даёт приглушённый "выключенный" вид; у
+    // таймера по умолчанию выключено, поэтому логика обратная микрофону.
+    btn.classList.toggle('off', !on);
+    btn.textContent = '⏱ Таймер: ' + (on ? 'вкл' : 'выкл');
+  }
 
   function cancelRecordingCountdown() {
     if (recSession && recSession.countdownTimer) {
@@ -703,7 +724,8 @@
       $('#rec-settings-row').hidden = false;
       return;
     }
-    startRecordingCountdown();
+    if (recordTimerEnabled()) startRecordingCountdown();
+    else beginRecordingNow();
   }
 
   /* То же самое, что раньше делала toggleRecordingUI() сразу по тапу —
@@ -1658,7 +1680,13 @@
     var isGroupStart = i === 0 || !sameGroup(chatMessages[i - 1], m);
     var isGroupEnd = i === chatMessages.length - 1 || !sameGroup(m, chatMessages[i + 1]);
     var time = formatLocalTime(m.at);
-    if (mine && !m.pending && m.seq) time += renderReadCount(m);
+    /* Раньше счётчик ждал m.seq (то есть подтверждения с сервера) — на
+       только что отправленном (ещё "pending") сообщении несколько
+       секунд не было вообще ничего. По прямому запросу — показываем
+       сразу: readersOf() и так всегда засчитывает самого отправителя
+       независимо от сервера (см. её комментарий выше), поэтому даже без
+       seq корректно посчитается "1/4", не "0/4" и не пусто. */
+    if (mine) time += renderReadCount(m);
 
     var avatarHtml = mine ? '' : (isGroupEnd
       ? '<div class="msg-avatar" style="background:' + participantColor(m.participantId) + '">' + participantInitial(m.participantId) + '</div>'
@@ -2843,8 +2871,10 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v64', items: [
-      'Чат больше не дёргается и не мигает, когда кто-то пишет — раньше ЛЮБОЕ новое сообщение (даже чужое) пересобирало всю ленту заново, из-за чего все картинки и видео в чате на миг мигали; теперь новое сообщение просто дописывается в конец'
+    { v: 'v66', items: [
+      'Обратный отсчёт перед съёмкой видео сокращён с 10 до 5 секунд',
+      'Счётчик прочтений ("1/4" и т. п.) теперь появляется под своим сообщением сразу при отправке, не дожидаясь ответа сервера',
+      'Таймер съёмки стал переключаемым — кнопка прямо на экране записи, по умолчанию выключен, запоминается на этом телефоне'
     ] }
   ];
 
@@ -3519,6 +3549,11 @@
     $('#cfg-papich').addEventListener('change', function () {
       localStorage.setItem(PAPICH_KEY, this.checked ? '1' : '0');
       applyPapichMode(); // фон в чате — сразу; заставка — только со следующего открытия приложения
+    });
+
+    $('#rec-timer-toggle').addEventListener('click', function () {
+      localStorage.setItem(RECORD_TIMER_KEY, recordTimerEnabled() ? '0' : '1');
+      renderRecTimerToggle();
     });
 
     $('#cfg-save').addEventListener('click', function () {
