@@ -613,6 +613,15 @@
         return apiRetry(cfg.url, 'update_video_reps', {
           participantId: participantId, videoId: videoId, reps: reps
         }, 3);
+      },
+
+      /* Реакция на видео — та же механика, что и Storage.chat.react:
+         повторный тап той же снимает, тап другой — переключает. */
+      react: async function (participantId, videoId, emoji) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
+        var r = await apiRetry(cfg.url, 'react_video', { participantId: participantId, videoId: videoId, emoji: emoji }, 3);
+        return r.video;
       }
     },
 

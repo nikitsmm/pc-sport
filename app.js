@@ -23,7 +23,11 @@
   };
 
   var STATUSES = ['done', 'alt', 'forgiven', 'missed'];
-  var REACTIONS = ['👍', '❤️', '😂', '🔥', '💪'];
+  /* Набор реакций — по образцу Telegram Web (тот же квик-бар над
+     сообщением: 👍🔥😂❤️😢👀🤝), плюс 💪 сохранили — тематическое для
+     фитнес-чата. Должен совпадать с REACTION_SET на бэкенде
+     (infra/centrifugo/backend/app.py) — если меняешь тут, поменяй и там. */
+  var REACTIONS = ['👍', '❤️', '🔥', '😂', '😢', '👀', '🤝', '💪'];
   var LABEL = { done: 'Норма', alt: 'Альт', forgiven: 'Форс', missed: 'Пропуск' };
   var GLYPH = { done: '✓', alt: '⇄', forgiven: '⚑', missed: '✕' };
   var EXNAME = { pullups: 'подтягиваний', pushups: 'отжиманий' };
@@ -377,8 +381,14 @@
       var del = v.participantId === myId()
         ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" data-delname="' + p.name + '" data-deldate="' + shortDate(v.date) + '" title="Удалить видео">✕</button>'
         : '';
-      return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
-             inner + reps + expiry + '</button>' + del + '</div>';
+      /* Суммарное число реакций на этом видео — прямо на миниатюре, по
+         прямому запросу ("видно сколько реакций получило видео"), без
+         захода в плеер. Разбивка по конкретным эмодзи — уже в самом
+         плеере (см. renderVideoReactions). */
+      var reactCount = Object.keys(v.reactions || {}).reduce(function (sum, e) { return sum + (v.reactions[e] || []).length; }, 0);
+      var reactBadge = reactCount ? '<span class="vid-react-badge">❤ ' + reactCount + '</span>' : '';
+      return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-vid="' + v.id + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
+             inner + reps + expiry + reactBadge + '</button>' + del + '</div>';
     }).join('');
     var addBtn = (!gone && canRecord && p.id === myId())
       ? '<button class="vid-add" data-rec="' + p.id + '" title="Записать видео">＋</button>'
@@ -480,7 +490,7 @@
       b.addEventListener('click', function () { openRecorder(b.dataset.rec); });
     });
     host.querySelectorAll('[data-play]').forEach(function (b) {
-      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who, b.dataset.reps); });
+      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who, b.dataset.reps, b.dataset.vid); });
     });
     host.querySelectorAll('[data-setreps]').forEach(function (b) {
       b.addEventListener('click', function (e) {
@@ -1188,13 +1198,14 @@
     });
   }
 
-  function openPlayer(path, who, reps) {
+  function openPlayer(path, who, reps, videoId) {
     $('#play-who').textContent = (who || '—') + (reps ? ' · ' + reps + ' повт.' : '');
     $('#play-video').src = '';
     $('#play-video').playbackRate = 1;
     $('#play-msg').textContent = 'Загружаю…';
     $('#play-fallback').href = '#';
     renderSpeedPicker();
+    renderVideoReactions(videoId);
     $('#playOverlay').classList.add('on');
     Storage.video.playUrl(path).then(function (r) {
       $('#play-video').src = r.url;
@@ -1202,6 +1213,40 @@
       $('#play-msg').textContent = '';
     }).catch(function (e) {
       $('#play-msg').textContent = 'Ошибка: ' + e.message;
+    });
+  }
+
+  /* Реакции на видео в плеере — своя полоса под видео (не в chat-ленте):
+     видео на главной живёт отдельно от чата (см. videoIndex), поэтому и
+     реакции у него свои, через action_react_video/videos.reactions, не
+     через чатовые react_message. videoId может отсутствовать (плеер,
+     открытый по видео-сообщению ИЗ чата — там своя реакция на
+     сообщение) — тогда полоса просто не рисуется. */
+  function renderVideoReactions(videoId) {
+    var host = $('#play-reactions');
+    if (!host) return;
+    if (!videoId) { host.innerHTML = ''; return; }
+    var v = videoIndex.items.filter(function (x) { return x.id === videoId; })[0];
+    var reactions = (v && v.reactions) || {};
+    var mine = myId();
+    host.innerHTML = REACTIONS.map(function (e) {
+      var who = reactions[e] || [];
+      var isMine = who.indexOf(mine) !== -1;
+      return '<button class="' + (isMine ? 'mine' : '') + '" data-vreact="' + e + '">' + e + (who.length ? ' ' + who.length : '') + '</button>';
+    }).join('');
+    host.querySelectorAll('[data-vreact]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var emoji = b.dataset.vreact;
+        Storage.video.react(mine, videoId, emoji).then(function (updated) {
+          var item = videoIndex.items.filter(function (x) { return x.id === videoId; })[0];
+          if (item) item.reactions = updated.reactions;
+          renderVideoReactions(videoId);
+          // Бейдж с суммой реакций на самой миниатюре — обновляем заодно,
+          // если сейчас открыта «Сегодня» (полный renderToday тут не
+          // накладен: список видео и так недлинный, а не чат на 500 сообщений).
+          if (document.getElementById('v-today').classList.contains('on')) renderToday();
+        }).catch(function (e2) { PCLog.warn('Реакция на видео не отправилась: ' + e2.message); });
+      });
     });
   }
 
@@ -2871,10 +2916,10 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v66', items: [
-      'Обратный отсчёт перед съёмкой видео сокращён с 10 до 5 секунд',
-      'Счётчик прочтений ("1/4" и т. п.) теперь появляется под своим сообщением сразу при отправке, не дожидаясь ответа сервера',
-      'Таймер съёмки стал переключаемым — кнопка прямо на экране записи, по умолчанию выключен, запоминается на этом телефоне'
+    { v: 'v67', items: [
+      'В чате больше реакций — набор расширен до 8 (как в Telegram): 👍❤️🔥😂😢👀🤝💪',
+      'Видно, сколько реакций набрало каждое видео — счётчик прямо на миниатюре, ставить/снимать реакцию можно из плеера',
+      'Добавлен таймер тренировки — старт/стоп на «Сегодня», пока идёт, отсчёт виден сверху приложения на любой вкладке'
     ] }
   ];
 
@@ -3620,6 +3665,14 @@
       });
     });
 
+    /* Стоп — без подтверждения (в отличие от удаления видео/сообщения):
+       ничего не теряется, случайно остановленный таймер снова запускается
+       одним тапом. Лишний диалог тут был бы просто трением. */
+    $('#ql-timer').addEventListener('click', function () {
+      if (workoutTimerStartedAt()) stopWorkoutTimer(); else startWorkoutTimer();
+    });
+    $('#workout-timer-stop').addEventListener('click', stopWorkoutTimer);
+
     $('#cfg-anchor').addEventListener('change', function () {
       if (this.value) { state.anchor = this.value; commit(); }
     });
@@ -3734,6 +3787,63 @@
     setTimeout(function () { el.remove(); }, 400);
   }
 
+  /* ============================================================
+     Таймер тренировки — простой секундомер на этом телефоне: старт
+     перед подходами, во время тренировки снимаешь/заливаешь видео как
+     обычно (см. renderParticipantVideoRow), в конце сам отмечаешь норму
+     выполненной (кнопки статуса, как и раньше) и жмёшь «Стоп». Ни с кем
+     не синхронизируется — так же, как «Режим Папич», это чисто
+     локальная штука для того, кто сейчас тренируется на этом телефоне,
+     не общее состояние челленджа. По прямому запросу отсчёт виден
+     сверху приложения (#workout-timer-bar в header-sticky) на ЛЮБОЙ
+     вкладке, не только на «Сегодня». */
+  var WORKOUT_TIMER_KEY = 'pcsport_workout_timer_start';
+  var workoutTimerTick = null;
+  function workoutTimerStartedAt() {
+    var v = localStorage.getItem(WORKOUT_TIMER_KEY);
+    var n = v ? parseInt(v, 10) : NaN;
+    return isFinite(n) ? n : null;
+  }
+  function formatWorkoutElapsed(startedAt) {
+    var sec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    var mm = Math.floor(sec / 60), ss = sec % 60;
+    return (mm < 10 ? '0' : '') + mm + ':' + (ss < 10 ? '0' : '') + ss;
+  }
+  function renderWorkoutTimerBar() {
+    var bar = $('#workout-timer-bar');
+    var startedAt = workoutTimerStartedAt();
+    if (bar) {
+      bar.hidden = !startedAt;
+      if (startedAt) $('#workout-timer-time').textContent = formatWorkoutElapsed(startedAt);
+    }
+    if (workoutTimerTick) { clearInterval(workoutTimerTick); workoutTimerTick = null; }
+    if (startedAt) {
+      workoutTimerTick = setInterval(function () {
+        var t = $('#workout-timer-time');
+        if (t) t.textContent = formatWorkoutElapsed(startedAt);
+      }, 1000);
+    }
+    // Высота шапки поменялась (полоса появилась/исчезла) — пересчитать
+    // отступ для скроллящихся контейнеров под ней (см. syncHeaderHeightVar).
+    syncHeaderHeightVar();
+    renderWorkoutQuicklink();
+  }
+  function renderWorkoutQuicklink() {
+    var btn = $('#ql-timer');
+    if (!btn) return;
+    var running = !!workoutTimerStartedAt();
+    btn.classList.toggle('running', running);
+    $('#ql-timer-label').textContent = running ? 'Тренировка идёт' : 'Таймер тренировки';
+  }
+  function startWorkoutTimer() {
+    localStorage.setItem(WORKOUT_TIMER_KEY, String(Date.now()));
+    renderWorkoutTimerBar();
+  }
+  function stopWorkoutTimer() {
+    localStorage.removeItem(WORKOUT_TIMER_KEY);
+    renderWorkoutTimerBar();
+  }
+
   function boot() {
     state = normalize(Storage.readLocal());
     chatMessages = Storage.chat.readCache();
@@ -3744,6 +3854,7 @@
     // до этого места мы вообще не доходим с ней в DOM
     bind();
     render();
+    renderWorkoutTimerBar(); // подхватывает уже идущий таймер, если приложение перезапустили посреди тренировки
     syncHeaderHeightVar();
     /* Шрифты (Unbounded/IBM Plex) могут доподгрузиться уже после
        первого замера и на пиксель-два изменить высоту шапки — один

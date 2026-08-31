@@ -18,7 +18,7 @@
      браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
      к уже обновившемуся index.html: получалась смесь старой и новой
      версии, и правки "не доезжали". Меняется вместе с номером версии. -->
-<link rel="stylesheet" href="styles.css?v=66">
+<link rel="stylesheet" href="styles.css?v=67">
 </head>
 <body>
 
@@ -42,11 +42,23 @@
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v66 · 31.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v67 · 31.08.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
 </header>
+
+<!-- Таймер тренировки — виден сверху приложения на ЛЮБОЙ вкладке, пока
+     идёт тренировка (Чат, Журнал, Настройки — не только «Сегодня»), по
+     прямому запросу. Сам таймер — простой секундомер на этом телефоне
+     (localStorage), ни с кем не синхронизируется: старт/стоп нажимает
+     только тот, у кого сейчас тренировка. -->
+<div class="workout-timer-bar" id="workout-timer-bar" hidden>
+  <span class="wt-dot"></span>
+  <span class="wt-label">Тренировка идёт</span>
+  <span class="wt-time" id="workout-timer-time">00:00</span>
+  <button class="wt-stop" id="workout-timer-stop">■ Стоп</button>
+</div>
 
 <!-- Верхняя навигация — заменила нижнюю панель вкладок. На "Сегодня"
      видна группа кнопок, на всех остальных экранах — одна "← Назад".
@@ -124,6 +136,10 @@
       <button data-view="rules"><span class="g">§</span>Правила</button>
       <button id="ql-refresh"><span class="g">↻</span><span id="ql-refresh-label">Обновить</span></button>
     </div>
+    <!-- Таймер тренировки — старт/стоп своего личного секундомера.
+         Пока идёт, тот же счётчик виден сверху на любой вкладке
+         (#workout-timer-bar), а тут кнопка меняется на "Идёт, N:NN". -->
+    <button class="wt-toggle" id="ql-timer"><span class="g">⏱</span><span id="ql-timer-label">Таймер тренировки</span></button>
     <div class="save-status" id="save-status" hidden></div>
     <div class="datebar">
       <button id="d-prev" aria-label="Предыдущий день">‹</button>
@@ -425,6 +441,9 @@
     <div class="rec-head"><span id="play-who">—</span><button id="play-close" class="close-safe" aria-label="Закрыть просмотр">← Закрыть</button></div>
     <div class="rec-stage"><video id="play-video" playsinline controls></video></div>
     <div class="speed-pick" id="play-speed"></div>
+    <!-- Реакции на само видео — тот же принцип, что и в чате: тап по
+         своему эмодзи ставит/снимает, счётчик виден сразу под плеером. -->
+    <div class="vid-react-row" id="play-reactions"></div>
     <div class="rec-msg" id="play-msg"></div>
     <div class="rec-controls">
       <a class="btn cam" id="play-fallback" href="#" target="_blank" rel="noopener">Открыть ссылкой</a>
@@ -433,9 +452,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js?v=66"></script>
-<script src="video.js?v=66"></script>
-<script src="storage.js?v=66"></script>
-<script src="app.js?v=66"></script>
+<script src="log.js?v=67"></script>
+<script src="video.js?v=67"></script>
+<script src="storage.js?v=67"></script>
+<script src="app.js?v=67"></script>
 </body>
 </html>
