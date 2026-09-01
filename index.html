@@ -2,7 +2,14 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- interactive-widget=resizes-content (Safari/iOS 17.4+, Chrome) — при
+     появлении клавиатуры браузер УМЕНЬШАЕТ видимую область (как и
+     100dvh, которым уже посчитана высота чата), а не панорамирует
+     страницу вверх поверх нижней панели ОС. Без этого iOS сдвигал ВЕСЬ
+     layout viewport, включая закреплённую шапку (.header-sticky,
+     position:sticky) — она укатывалась за экран при фокусе на поле
+     ввода чата, хотя body.chat-open и так запрещает собственный скролл. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>ПЦ Спорт</title>
 <meta name="theme-color" content="#10171E">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -18,14 +25,14 @@
      браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
      к уже обновившемуся index.html: получалась смесь старой и новой
      версии, и правки "не доезжали". Меняется вместе с номером версии. -->
-<link rel="stylesheet" href="styles.css?v=69">
+<link rel="stylesheet" href="styles.css?v=70">
 </head>
 <body>
 
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v69 · 01.09.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v70 · 01.09.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -480,9 +487,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js?v=69"></script>
-<script src="video.js?v=69"></script>
-<script src="storage.js?v=69"></script>
-<script src="app.js?v=69"></script>
+<script src="log.js?v=70"></script>
+<script src="video.js?v=70"></script>
+<script src="storage.js?v=70"></script>
+<script src="app.js?v=70"></script>
 </body>
 </html>
