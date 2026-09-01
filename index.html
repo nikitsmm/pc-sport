@@ -18,31 +18,14 @@
      браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
      к уже обновившемуся index.html: получалась смесь старой и новой
      версии, и правки "не доезжали". Меняется вместе с номером версии. -->
-<link rel="stylesheet" href="styles.css?v=68">
+<link rel="stylesheet" href="styles.css?v=69">
 </head>
 <body>
 
-<!-- Заставка при открытии — по прямому запросу, ровно 2 секунды, потом
-     сама убирается (см. #splash-screen в app.js). Прямо в разметке, а
-     не рисуется скриптом — чтобы было видно СРАЗУ, ещё до того, как
-     app.js вообще успел выполниться. -->
-<div id="splash-screen">
-  <img src="icons/splash-papich.jpg" alt="">
-</div>
-<script>
-  /* Не через app.js (он ещё не загрузился к этому моменту) — если
-     "Режим Папич" выключен в Настройках, прячем заставку СРАЗУ, пока
-     страница ещё парсится, чтобы не было даже короткой вспышки
-     картинки перед тем, как её уберёт основной скрипт. */
-  if (localStorage.getItem('pcsport_papich') === '0') {
-    var _splashEl = document.getElementById('splash-screen');
-    if (_splashEl) _splashEl.remove();
-  }
-</script>
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v68 · 01.09.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v69 · 01.09.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -66,6 +49,11 @@
      уезжает при скролле — по прямому запросу. -->
 <div class="topnav" id="topnav">
   <button class="topnav-back" id="topnav-back" data-view="today" hidden>← Назад</button>
+  <!-- "Денис печатает…" — справа от "← Назад", как в референсе Telegram
+       (голубой текст рядом с заголовком). Виден только на вкладке "Чат"
+       (см. body.chat-open в styles.css) и только пока реально кто-то
+       печатает — renderTypingBar() в app.js. -->
+  <span class="topnav-typing" id="topnav-typing" hidden></span>
   <div class="topnav-home-actions" id="topnav-home-actions">
     <button class="topnav-journal" data-view="log"><span class="g">▤</span>Журнал</button>
     <button class="topnav-chat" data-view="chat">💬 Чат<span class="chat-dot" id="chat-dot" hidden></span></button>
@@ -204,10 +192,6 @@
       <input type="file" id="attach-input-media" accept="image/*,video/*" hidden>
       <input type="file" id="attach-input-file" hidden>
       <div class="emoji-picker" id="emoji-picker" hidden></div>
-      <!-- "Артур печатает…" — над самим полем ввода, как в Telegram.
-           Текст собирается в renderTypingBar() (app.js) по тому, кто
-           прислал "typing"-пинг через Centrifugo за последние секунды. -->
-      <div class="chat-typing-bar" id="chat-typing-bar" hidden></div>
       <form class="chat-input" id="chat-form">
         <div class="chat-input-pill">
           <button class="chat-icon-btn" id="chat-attach-btn" type="button" title="Прикрепить">
@@ -365,13 +349,6 @@
         <p class="h">Дальше подтягивания и отжимания идут через день от этой даты.</p>
       </div>
 
-      <h2>Разное</h2>
-      <div class="panel">
-        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-          <input type="checkbox" id="cfg-papich" style="width:18px;height:18px">
-          <span>Режим Папич (заставка при открытии + фон в чате)</span>
-        </label>
-      </div>
     </div>
 
     <div class="cfg-group">
@@ -503,9 +480,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js?v=68"></script>
-<script src="video.js?v=68"></script>
-<script src="storage.js?v=68"></script>
-<script src="app.js?v=68"></script>
+<script src="log.js?v=69"></script>
+<script src="video.js?v=69"></script>
+<script src="storage.js?v=69"></script>
+<script src="app.js?v=69"></script>
 </body>
 </html>

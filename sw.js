@@ -7,24 +7,22 @@
    телефон в сети, всегда грузится свежее; кэш нужен только когда сети
    вообще нет. */
 
-var CACHE = 'pcsport-v68';
+var CACHE = 'pcsport-v69';
 /* С ?v= — теми же адресами, какими их запрашивает index.html (см.
    комментарий там). Без совпадения адресов офлайн-кэш просто не нашёлся
    бы по запрошенному URL. */
 var SHELL = [
   './',
   'index.html',
-  'styles.css?v=68',
-  'app.js?v=68',
-  'storage.js?v=68',
-  'video.js?v=68',
-  'log.js?v=68',
+  'styles.css?v=69',
+  'app.js?v=69',
+  'storage.js?v=69',
+  'video.js?v=69',
+  'log.js?v=69',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',
-  'icons/apple-touch-icon.png',
-  'icons/splash-papich.jpg',
-  'icons/chat-bg-papich.jpg'
+  'icons/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', function (e) {

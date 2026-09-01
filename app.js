@@ -668,6 +668,14 @@
     b.classList.remove('active');
   }
 
+  /* Пока реально идёт запись — кнопка должна явно говорить "Стоп", а не
+     молча менять смысл под тем же текстом "Запись". */
+  function setToggleRecording() {
+    var b = $('#rec-toggle');
+    b.textContent = '■ Стоп';
+    b.classList.add('active');
+  }
+
   /* Обратный отсчёт 5…1 перед стартом записи — по образцу штатного
      "Таймера" в камере iPhone. Камера уже работает и показывает
      картинку всё это время (см. openRecorder/openCamera) — отсчёт
@@ -675,9 +683,9 @@
      больше не меняет в самой логике записи/загрузки. Повторный тап по
      кнопке во время отсчёта — отмена (как и на iPhone), а не игнор.
 
-     Необязательный — по умолчанию ВЫКЛЮЧЕН (localStorage-флаг, per-device,
-     тот же принцип, что и "Режим Папич"): большинство просто жмут
-     запись сразу, отсчёт нужен не всем и не всегда. Переключатель —
+     Необязательный — по умолчанию ВЫКЛЮЧЕН (localStorage-флаг, per-device):
+     большинство просто жмут запись сразу, отсчёт нужен не всем и не
+     всегда. Переключатель —
      прямо в самом меню съёмки (см. #rec-timer-toggle), не в Настройках:
      нужен именно в моменте, когда снимаешь, незачем идти за ним на
      другой экран. */
@@ -761,8 +769,7 @@
   function beginRecordingNow() {
     if (!recSession) return;
     recSession.recording = true;
-    setToggleIdle(); // тот же текст "● Запись", кнопка снова означает "Стоп" по нажатию — как и было
-    $('#rec-toggle').classList.add('active');
+    setToggleRecording(); // "■ Стоп" — по нажатию останавливает запись
     $('#rec-flip').disabled = true;
     $('#rec-gallery').disabled = true;
     $('#rec-timer').hidden = false;
@@ -1591,15 +1598,16 @@
   var TYPING_PING_INTERVAL_MS = 2500; // не чаще, чем раз в 2.5с, пока человек печатает
 
   function renderTypingBar() {
-    var bar = $('#chat-typing-bar');
+    var bar = $('#topnav-typing');
     if (!bar) return;
     var ids = Object.keys(typingUsers);
-    if (!ids.length) { bar.hidden = true; bar.textContent = ''; return; }
-    var names = ids.map(chatDisplayName);
-    var text = names.length === 1 ? (names[0] + ' печатает…')
-      : names.length === 2 ? (names[0] + ' и ' + names[1] + ' печатают…')
-      : (names.length + ' чел. печатают…');
-    bar.textContent = text;
+    if (!ids.length) { bar.hidden = true; bar.innerHTML = ''; return; }
+    /* Формат как в референсе — "••• Имя" одному человеку, "••• N"
+       нескольким (не список имён и не слово "печатают"). Точки тем же
+       приглушённым тоном, что и остальные служебные подписи, имя/число —
+       акцентным голубым (см. .topnav-typing/.topnav-typing b в styles.css). */
+    var label = ids.length === 1 ? chatDisplayName(ids[0]) : String(ids.length);
+    bar.innerHTML = '<span class="topnav-typing-dots">•••</span> <b>' + esc(label) + '</b>';
     bar.hidden = false;
   }
 
@@ -1755,20 +1763,37 @@
     return kb > 1024 ? (kb / 1024).toFixed(1) + ' МБ' : kb + ' КБ';
   }
 
+  /* Пузырь-без-фона (см. .bubble.media-only в styles.css): применяется
+     только к "голому" медиа-сообщению без текста-подписи — с подписью
+     фон под текстом всё равно нужен, поэтому там обычный пузырь. */
+  function isMediaOnly(m) {
+    if (m.text) return false;
+    return m.type === 'video' || m.type === 'image' ||
+      (m.type === 'file' && m.attachMime && m.attachMime.indexOf('video/') === 0);
+  }
+
   function renderMessageBody(m, time) {
     if (m.type === 'video') {
       var thumb = m.videoThumb ? '<img src="' + m.videoThumb + '" alt="">' : '<div class="chat-vid-noimg">▶</div>';
       var reps = m.videoReps ? '<span class="chat-vid-reps">' + m.videoReps + ' повт.</span>' : '';
-      var caption = m.text ? '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>' : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + '</div>';
+      if (m.text) {
+        var caption = '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>';
+        return '<button class="chat-vid-card" data-play="' + m.videoPath + '" data-who="' + esc(chatDisplayName(m.participantId)) + '" data-reps="' + (m.videoReps || '') + '">' +
+               thumb + '<span class="chat-vid-play">▶</span>' + reps + '</button>' + caption;
+      }
+      /* Без подписи — время не отдельной строкой под пузырём, а чипом
+         прямо поверх превью (пузырь у такого сообщения прозрачный). */
       return '<button class="chat-vid-card" data-play="' + m.videoPath + '" data-who="' + esc(chatDisplayName(m.participantId)) + '" data-reps="' + (m.videoReps || '') + '">' +
-             thumb + '<span class="chat-vid-play">▶</span>' + reps + '</button>' + caption;
+             thumb + '<span class="chat-vid-play">▶</span>' + reps + '<span class="chat-media-time">' + time + '</span></button>';
     }
     if (m.type === 'image') {
-      var imgCaption = m.text
-        ? '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>'
-        : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + (m.pending ? ' · отправка…' : '') + '</div>';
       var imgInner = m.localPreview ? '<img src="' + m.localPreview + '" alt="">' : '<div class="chat-img-spinner">⏳</div>';
-      return '<div class="chat-img-card" data-attach-path="' + esc(m.attachPath || '') + '">' + imgInner + '</div>' + imgCaption;
+      if (m.text) {
+        var imgCaption = '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>';
+        return '<div class="chat-img-card" data-attach-path="' + esc(m.attachPath || '') + '">' + imgInner + '</div>' + imgCaption;
+      }
+      var imgTime = time + (m.pending ? ' · отправка…' : '');
+      return '<div class="chat-img-card" data-attach-path="' + esc(m.attachPath || '') + '">' + imgInner + '<span class="chat-media-time">' + imgTime + '</span></div>';
     }
     /* Видео, выбранное через скрепку ("Фото или видео" → любой файл с
        video/*-mime) — раньше уходило тем же типом 'file', что и обычный
@@ -1776,13 +1801,17 @@
        Рендерим как встроенный <video controls>, тем же ленивым
        presigned-GET, что и у картинок (см. loadChatImages/setCardMedia). */
     if (m.type === 'file' && m.attachMime && m.attachMime.indexOf('video/') === 0) {
-      var clipCaption = m.text
-        ? '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>'
-        : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + (m.pending ? ' · отправка…' : '') + '</div>';
       var clipInner = m.localPreview
         ? '<video src="' + m.localPreview + '" controls playsinline preload="metadata"></video>'
         : '<div class="chat-img-spinner">⏳</div>';
-      return '<div class="chat-img-card chat-clip-card" data-kind="video" data-attach-path="' + esc(m.attachPath || '') + '">' + clipInner + '</div>' + clipCaption;
+      if (m.text) {
+        var clipCaption = '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>';
+        return '<div class="chat-img-card chat-clip-card" data-kind="video" data-attach-path="' + esc(m.attachPath || '') + '">' + clipInner + '</div>' + clipCaption;
+      }
+      /* Тут не чип поверх, а обычная строка под видео — у <video controls>
+         свои элементы управления снизу, оверлей-чип перекрывал бы их. */
+      var clipTime = '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + (m.pending ? ' · отправка…' : '') + '</div>';
+      return '<div class="chat-img-card chat-clip-card" data-kind="video" data-attach-path="' + esc(m.attachPath || '') + '">' + clipInner + '</div>' + clipTime;
     }
     if (m.type === 'file') {
       var sizeStr = formatFileSize(m.attachSize) + (m.pending ? ' · отправка…' : '');
@@ -1837,7 +1866,7 @@
     var checkHtml = (selectMode && !m.pending) ? '<div class="msg-select-check' + (selected ? ' checked' : '') + '"></div>' : '';
 
     var rowCls = 'msg-row' + (mine ? ' mine' : '') + (isGroupStart ? ' group-start' : '') + (selected ? ' selected' : '');
-    var bubbleCls = 'bubble' + (mine ? ' out' : ' in') + (m.pending ? ' pending' : '');
+    var bubbleCls = 'bubble' + (mine ? ' out' : ' in') + (m.pending ? ' pending' : '') + (isMediaOnly(m) ? ' media-only' : '');
 
     return sep +
       '<div class="' + rowCls + '" id="msg-' + m.id + '" data-mid="' + m.id + '">' + checkHtml + avatarHtml +
@@ -3143,7 +3172,6 @@
     renderProfilePanel();
     renderChangelog();
     refreshDiskUsage();
-    $('#cfg-papich').checked = papichEnabled();
     var cfg = Storage.config.read();
     $('#cfg-backend').value = cfg.backend;
     $('#cfg-url').value = cfg.url || '';
@@ -3799,11 +3827,6 @@
       $('#cfg-cloud').hidden = this.value !== 'cloud';
     });
 
-    $('#cfg-papich').addEventListener('change', function () {
-      localStorage.setItem(PAPICH_KEY, this.checked ? '1' : '0');
-      applyPapichMode(); // фон в чате — сразу; заставка — только со следующего открытия приложения
-    });
-
     $('#rec-timer-toggle').addEventListener('click', function () {
       localStorage.setItem(RECORD_TIMER_KEY, recordTimerEnabled() ? '0' : '1');
       renderRecTimerToggle();
@@ -3983,39 +4006,14 @@
   }
 
   /* ============================================================
-     "Режим Папич" — заставка на 2 сек при открытии + фон в чате,
-     общий выключатель на весь этот прикол. По умолчанию включён (сам
-     факт, что localStorage пуст, ещё не значит "выключено"). Значение
-     хранится локально на телефоне — как и идентичность, не общее на
-     всех участников. Ключ и значения ('1'/'0') совпадают с инлайн-
-     скриптом в index.html, который прячет заставку ДО загрузки этого
-     файла — если поменять здесь, поменять и там. */
-  var PAPICH_KEY = 'pcsport_papich';
-  function papichEnabled() {
-    var v = localStorage.getItem(PAPICH_KEY);
-    return v !== '0';
-  }
-  function applyPapichMode() {
-    document.body.classList.toggle('papich-off', !papichEnabled());
-  }
-
-  function hideSplash() {
-    var el = document.getElementById('splash-screen');
-    if (!el) return;
-    el.classList.add('hide');
-    setTimeout(function () { el.remove(); }, 400);
-  }
-
-  /* ============================================================
      Таймер тренировки — простой секундомер на этом телефоне: старт
      перед подходами, во время тренировки снимаешь/заливаешь видео как
      обычно (см. renderParticipantVideoRow), в конце сам отмечаешь норму
      выполненной (кнопки статуса, как и раньше) и жмёшь «Стоп». Ни с кем
-     не синхронизируется — так же, как «Режим Папич», это чисто
-     локальная штука для того, кто сейчас тренируется на этом телефоне,
-     не общее состояние челленджа. По прямому запросу отсчёт виден
-     сверху приложения (#workout-timer-bar в header-sticky) на ЛЮБОЙ
-     вкладке, не только на «Сегодня». */
+     не синхронизируется — чисто локальная штука для того, кто сейчас
+     тренируется на этом телефоне, не общее состояние челленджа. По
+     прямому запросу отсчёт виден сверху приложения (#workout-timer-bar
+     в header-sticky) на ЛЮБОЙ вкладке, не только на «Сегодня». */
   var WORKOUT_TIMER_KEY = 'pcsport_workout_timer_start';
   var workoutTimerTick = null;
   function workoutTimerStartedAt() {
@@ -4047,30 +4045,39 @@
     syncHeaderHeightVar();
     renderWorkoutQuicklink();
   }
+  /* Пока тренировка идёт, статус и "Стоп" уже видны в самой верхней
+     красной полосе (#workout-timer-bar) — эта кнопка на "Сегодня" в
+     этот момент только дублирует её и мешает, поэтому по прямому
+     запросу на время тренировки просто прячется, а не меняет текст. */
   function renderWorkoutQuicklink() {
     var btn = $('#ql-timer');
     if (!btn) return;
     var running = !!workoutTimerStartedAt();
-    btn.classList.toggle('running', running);
-    $('#ql-timer-label').textContent = running ? 'Тренировка идёт' : 'Таймер тренировки';
+    btn.hidden = running;
+    $('#ql-timer-label').textContent = 'Таймер тренировки';
   }
   function startWorkoutTimer() {
     localStorage.setItem(WORKOUT_TIMER_KEY, String(Date.now()));
     renderWorkoutTimerBar();
   }
+  /* Останавливает секундомер и по прямому запросу шлёт в чат сообщение
+     о продолжительности — от лица того, кто тренировался (та же
+     chatAnnounce(), что и для видео/отметок норм), best-effort, не
+     блокирует сам стоп таймера, если отправка вдруг не удастся. */
   function stopWorkoutTimer() {
+    var startedAt = workoutTimerStartedAt();
     localStorage.removeItem(WORKOUT_TIMER_KEY);
     renderWorkoutTimerBar();
+    if (startedAt) {
+      var id = myId();
+      if (id) chatAnnounce(id, '⏱ Тренировка завершена — длительность ' + formatWorkoutElapsed(startedAt));
+    }
   }
 
   function boot() {
     state = normalize(Storage.readLocal());
     chatMessages = Storage.chat.readCache();
     cursor = today();
-    applyPapichMode();
-    if (papichEnabled()) setTimeout(hideSplash, 2000);
-    // если выключено — заставку уже убрал инлайн-скрипт в index.html,
-    // до этого места мы вообще не доходим с ней в DOM
     bind();
     render();
     renderWorkoutTimerBar(); // подхватывает уже идущий таймер, если приложение перезапустили посреди тренировки

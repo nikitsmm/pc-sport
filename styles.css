@@ -27,19 +27,6 @@ body{
 }
 button{font:inherit;color:inherit;cursor:pointer;}
 
-/* ---------- заставка при открытии (2 секунды, см. app.js) ----------
-   Появление — через @keyframes (проигрывается сама, автоматически,
-   без JS): начинает с прозрачной, за .4с становится полностью видимой.
-   Исчезание — через transition, запускается добавлением класса .hide
-   из app.js (hideSplash()) — обычным изменением стиля, не анимацией,
-   поэтому transition, а не второй @keyframes. */
-#splash-screen{position:fixed;inset:0;z-index:999;background:#000;
-  display:flex;align-items:center;justify-content:center;
-  opacity:0;animation:splash-fade-in .4s ease forwards;
-  transition:opacity .4s ease;}
-#splash-screen img{width:100%;height:100%;object-fit:cover;}
-#splash-screen.hide{opacity:0;pointer-events:none;}
-@keyframes splash-fade-in{ to { opacity:1; } }
 h2{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
    letter-spacing:.2em;text-transform:uppercase;color:var(--steel);margin:0 0 12px;}
 .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;}
@@ -214,6 +201,15 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
 .topnav-back{background:#1E2A36;border:1px solid #33485C;color:#fff;font-family:"JetBrains Mono",monospace;
   font-size:12.5px;font-weight:700;letter-spacing:.02em;padding:7px 14px;border-radius:11px;
   display:flex;align-items:center;gap:4px;}
+/* "Денис печатает…" справа от "← Назад" — тот же голубой акцент и
+   тот же некрупный шрифт, что в референсе Telegram (заголовок чата).
+   Показывается только на вкладке "Чат" (body.chat-open) — на "Журнал"/
+   "Настройки" тот же #topnav-back используется без этого текста. */
+.topnav-typing{display:none;font-family:"IBM Plex Sans",sans-serif;font-size:13px;
+  font-weight:600;color:#9FB0BE;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.topnav-typing b{color:#4EA1F5;font-weight:600;}
+body.chat-open .topnav-typing:not([hidden]){display:block;}
+
 .topnav-home-actions{display:flex;align-items:center;gap:8px;width:100%;}
 .topnav-journal{background:#1E2A36;border:1px solid #33485C;color:#9FB0BE;padding:6px 12px;
   font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.02em;
@@ -246,16 +242,16 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   font-size:11px;font-weight:700;}
 .wt-stop:active{background:rgba(255,255,255,.3);}
 
-/* Кнопка старта — на "Сегодня", под мини-кнопками. Пока таймер не
-   идёт — обычная кнопка; во время тренировки становится плашкой того
-   же сигнального цвета, что и полоса сверху, чтобы было видно с одного
-   взгляда, что тренировка уже запущена. */
+/* Кнопка старта — на "Сегодня", под мини-кнопками. Видна только пока
+   таймер НЕ идёт — во время тренировки статус и "Стоп" уже показывает
+   верхняя красная полоса (#workout-timer-bar), эта кнопка в этот
+   момент прячется (см. renderWorkoutQuicklink() в app.js), чтобы не
+   дублировать и не мешать. */
 .wt-toggle{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;
   background:var(--card);border:1px solid var(--rule);color:var(--ink);
   padding:11px 10px;border-radius:12px;margin-bottom:16px;
   font-family:"JetBrains Mono",monospace;font-size:12.5px;font-weight:700;letter-spacing:.02em;}
 .wt-toggle .g{font-size:15px;line-height:1;}
-.wt-toggle.running{background:var(--signal);border-color:var(--signal);color:#fff;}
 
 /* Всплывающее сообщение — для действий с главной, где нет своей
    строки статуса (колокольчик уведомлений). */
@@ -472,17 +468,8 @@ table.log td span{display:block;width:100%;padding:11px 2px;font-size:14px;line-
   height:calc(100vh - var(--header-h));
   height:calc(100dvh - var(--header-h));
   overflow:hidden;
-  /* Фон чата — по прямому запросу, одна картинка на всех. Тёмный
-     градиент поверх (не просто затемняющий фильтр) — чтобы текст
-     сообщений оставался читаемым независимо от того, что на картинке
-     светлое, а что тёмное; сама картинка видна, но приглушённо. */
-  background:linear-gradient(rgba(18,19,22,.86), rgba(18,19,22,.86)), url('icons/chat-bg-papich.jpg') center/cover no-repeat;
-  background-color:var(--chat-bg);
+  background:var(--chat-bg);
   padding:0;color:var(--chat-text);}
-/* "Режим Папич" выключен в Настройках — обычный однотонный фон, без
-   картинки. !important — иначе пришлось бы дублировать всю строку
-   выше со всеми свойствами background, только ради одного отличия. */
-body.papich-off .view.on#v-chat{background:var(--chat-bg) !important;}
 /* Пока открыт чат, страница целиком не скроллится — иначе под чатом
    оставалась "губа" из фона body, которую можно было оттянуть. */
 body.chat-open{overflow:hidden;}
@@ -518,6 +505,22 @@ body.chat-open{overflow:hidden;}
   min-width:0;position:relative;background:var(--chat-surface2);}
 .bubble.out{background:var(--chat-mine);}
 .bubble-text{white-space:pre-wrap;word-break:break-word;padding-right:2px;}
+
+/* Медиа без подписи — как в Telegram: никакого цветного "пузыря" вокруг
+   фото/видео, сама картинка и есть пузырь (со своими скруглёнными
+   углами). Применяется только когда у сообщения нет текста-подписи
+   (см. isMediaOnly() в app.js) — с подписью пузырь остаётся обычным,
+   т.к. под текст всё равно нужен фон. */
+.bubble.media-only{padding:0;background:transparent;}
+/* Реакции обычно "заезжают" под пузырь на -9px (см. .msg-reactions
+   ниже) — это рассчитано на цветной фон пузыря под ними. У голого медиа
+   фона нет, тот же отрицательный отступ обрезал бы кусок фото/видео. */
+.bubble.media-only + .msg-reactions{margin-top:6px;}
+/* Имя отправителя (в группе) и цитата-ответ рендерятся ДО медиа внутри
+   того же пузыря — у них своего отступа от краёв не было, его давал
+   padding пузыря, которого у media-only больше нет. */
+.bubble.media-only .msg-sender-inline{margin:6px 8px 4px;}
+.bubble.media-only .reply-quote{margin:6px 8px 5px;}
 
 /* Время — последним элементом текста, float:right заставляет текст
    обтекать его, как в телеге, вместо отдельной строки под сообщением. */
@@ -604,6 +607,16 @@ body.chat-open{overflow:hidden;}
   display:flex;align-items:center;justify-content:center;font-size:14px;pointer-events:none;}
 .chat-vid-reps{position:absolute;bottom:5px;right:5px;background:rgba(16,23,30,.82);color:#fff;
   font-size:10px;font-weight:700;padding:2px 5px;border-radius:4px;}
+/* Счётчик повторов и время вместе не влезают в один угол — время уходит
+   в левый нижний. */
+.chat-vid-reps ~ .chat-media-time{left:5px;right:auto;}
+
+/* Время поверх фото/видео без подписи — полупрозрачный чип в правом
+   нижнем углу самого медиа, как в Telegram, вместо отдельной строки
+   под пузырём (той больше нет — см. .bubble.media-only выше). */
+.chat-media-time{position:absolute;bottom:5px;right:6px;background:rgba(16,23,30,.55);
+  color:#fff;font-size:10.5px;line-height:1;padding:3px 6px;border-radius:9px;
+  pointer-events:none;white-space:nowrap;}
 
 /* ---------- делитель непрочитанных ---------- */
 .chat-unread-divider{align-self:center;font-size:11px;font-weight:700;color:#fff;
@@ -618,13 +631,6 @@ body.chat-open{overflow:hidden;}
 .reply-bar-txt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .reply-bar-txt b{display:block;font-size:11px;font-weight:600;color:var(--chat-primary);}
 .reply-bar button{background:transparent;border:0;color:var(--chat-muted);font-size:15px;padding:2px 4px;}
-
-/* "Артур печатает…" — в потоке, прямо над полем ввода, как reply-bar
-   выше. Своей высотой НЕ раздвигает соседей рывком — просто короткая
-   строка появляется/пропадает (сообщения в ленте её не замечают,
-   т.к. это не renderChat()/appendNewMessages(), а отдельный элемент). */
-.chat-typing-bar{padding:4px 12px;font-size:12px;color:var(--chat-muted);font-style:italic;
-  background:var(--chat-bg);}
 
 /* Нижняя строка flex-колонки чата. Никакого fixed: место под себя
    занимает физически, поэтому сообщения под него заехать не могут.
