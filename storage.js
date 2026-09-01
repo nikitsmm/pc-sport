@@ -392,10 +392,13 @@
 
       /* Список участников/норм и общие настройки (штраф, лимит альтернатив
          и т.п.) меняются редко и почти никогда параллельно с чужого
-         телефона — для них пока оставлена более простая логика "берём
-         версию с телефона, где updatedAt свежее", риск ниже на порядок,
-         чем у days, где правки идут каждый день с четырёх телефонов
-         одновременно. */
+         телефона — для них оставлена более простая логика "берём
+         версию с телефона, где updatedAt свежее". (Ник и фото профиля
+         сюда НЕ входят — у них своя таблица profiles на chatstore,
+         каждый правит только свою строку отдельным запросом, см.
+         Storage.profiles ниже и renderProfilePanel() в app.js. Так эти
+         правки не завязаны на редкую синхронизацию общего state.json и
+         не рискуют затирать друг друга при двух одновременных правках.) */
       var l = Date.parse(localState.updatedAt || 0) || 0;
       var r = Date.parse(remoteState.updatedAt || 0) || 0;
       if (l > r) {
@@ -613,15 +616,30 @@
         return apiRetry(cfg.url, 'update_video_reps', {
           participantId: participantId, videoId: videoId, reps: reps
         }, 3);
-      },
+      }
+    },
 
-      /* Реакция на видео — та же механика, что и Storage.chat.react:
-         повторный тап той же снимает, тап другой — переключает. */
-      react: async function (participantId, videoId, emoji) {
+    /* ============================================================
+       Профиль в чате — свой ник и фото (Настройки → Профиль). Своя
+       маленькая таблица на chatstore (profiles), не часть общего
+       state.json — см. подробное объяснение в chatstore/app.py над
+       таблицей profiles. list() тянут все четверо (посмотреть чужие
+       ники/фото), save() — только своё, participantId запроса и есть
+       тот, чей профиль правим (проверяется на бэкенде). */
+    profiles: {
+      list: async function () {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) return { items: [] };
+        return api(cfg.url, 'get_profiles', {});
+      },
+      save: async function (participantId, fields) {
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) throw new Error('Облако не настроено');
-        var r = await apiRetry(cfg.url, 'react_video', { participantId: participantId, videoId: videoId, emoji: emoji }, 3);
-        return r.video;
+        var body = { participantId: participantId };
+        if ('nick' in fields) body.nick = fields.nick;
+        if ('avatar' in fields) body.avatar = fields.avatar;
+        var r = await apiRetry(cfg.url, 'save_profile', body, 3);
+        return r.profile;
       }
     },
 
@@ -737,6 +755,18 @@
         var cfg = Config.read();
         if (cfg.backend !== 'cloud' || !cfg.url) return;
         return api(cfg.url, 'mark_read', { participantId: participantId });
+      },
+
+      /* "Печатает…" — тоже best-effort и без единой попытки на повтор:
+         это сиюминутный пинг, следующий (пока человек продолжает
+         печатать) всё равно уйдёт через пару секунд, ретраить старый
+         смысла нет — только лишняя нагрузка. active=false — явное
+         "перестал" (поле опустело/сообщение отправлено), чтобы у
+         остальных статус пропадал мгновенно, а не по таймауту. */
+      typing: async function (participantId, active) {
+        var cfg = Config.read();
+        if (cfg.backend !== 'cloud' || !cfg.url) return;
+        return api(cfg.url, 'typing', { participantId: participantId, active: active !== false }).catch(function () {});
       },
 
       send: async function (participantId, text, replyTo, clientId) {

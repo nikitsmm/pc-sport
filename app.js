@@ -23,11 +23,16 @@
   };
 
   var STATUSES = ['done', 'alt', 'forgiven', 'missed'];
-  /* Набор реакций — по образцу Telegram Web (тот же квик-бар над
-     сообщением: 👍🔥😂❤️😢👀🤝), плюс 💪 сохранили — тематическое для
-     фитнес-чата. Должен совпадать с REACTION_SET на бэкенде
+  /* Набор реакций — 3 строки по 8 (расширили по прямому запросу, было
+     8/1 строка), первая — самые ходовые (тот же квик-бар, что и в
+     Telegram Web: 👍🔥😂❤️😢👀🤝), плюс 💪 — тематическое для фитнес-чата.
+     Должен совпадать с REACTION_SET на бэкенде
      (infra/centrifugo/backend/app.py) — если меняешь тут, поменяй и там. */
-  var REACTIONS = ['👍', '❤️', '🔥', '😂', '😢', '👀', '🤝', '💪'];
+  var REACTIONS = [
+    '👍', '❤️', '🔥', '😂', '😢', '👀', '🤝', '💪',
+    '👎', '🎉', '😍', '🤔', '😱', '🙏', '👏', '💯',
+    '🤣', '😡', '🥰', '🤯', '💔', '🕊', '🌚', '🤡'
+  ];
   var LABEL = { done: 'Норма', alt: 'Альт', forgiven: 'Форс', missed: 'Пропуск' };
   var GLYPH = { done: '✓', alt: '⇄', forgiven: '⚑', missed: '✕' };
   var EXNAME = { pullups: 'подтягиваний', pushups: 'отжиманий' };
@@ -36,6 +41,7 @@
   var cursor = null;      // текущая дата на вкладке «Сегодня»
   var saveTimer = null;
   var videoIndex = { items: [], retentionDays: 0 };  // кэш ответа list_videos
+  var profiles = {};      // participantId -> {nick, avatar, updatedAt}, кэш ответа get_profiles (см. refreshProfiles)
   var recSession = null;  // { stream, ctrl, participantId, date, blob, ext }
   var chatMessages = [];  // все известные сообщения, отсортированные по времени
   var chatReadState = {}; // {participantId: lastReadSeq} — курсоры прочитанного, см. счётчик "N/4" в чате
@@ -381,14 +387,8 @@
       var del = v.participantId === myId()
         ? '<button class="vid-del" data-del="' + v.path + '" data-delid="' + v.id + '" data-delname="' + p.name + '" data-deldate="' + shortDate(v.date) + '" title="Удалить видео">✕</button>'
         : '';
-      /* Суммарное число реакций на этом видео — прямо на миниатюре, по
-         прямому запросу ("видно сколько реакций получило видео"), без
-         захода в плеер. Разбивка по конкретным эмодзи — уже в самом
-         плеере (см. renderVideoReactions). */
-      var reactCount = Object.keys(v.reactions || {}).reduce(function (sum, e) { return sum + (v.reactions[e] || []).length; }, 0);
-      var reactBadge = reactCount ? '<span class="vid-react-badge">❤ ' + reactCount + '</span>' : '';
-      return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-vid="' + v.id + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
-             inner + reps + expiry + reactBadge + '</button>' + del + '</div>';
+      return '<div class="vid-clip"><button class="vid-thumb" data-play="' + v.path + '" data-who="' + p.name + '" data-reps="' + (v.reps || '') + '" title="Смотреть">' +
+             inner + reps + expiry + '</button>' + del + '</div>';
     }).join('');
     var addBtn = (!gone && canRecord && p.id === myId())
       ? '<button class="vid-add" data-rec="' + p.id + '" title="Записать видео">＋</button>'
@@ -490,7 +490,7 @@
       b.addEventListener('click', function () { openRecorder(b.dataset.rec); });
     });
     host.querySelectorAll('[data-play]').forEach(function (b) {
-      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who, b.dataset.reps, b.dataset.vid); });
+      b.addEventListener('click', function () { openPlayer(b.dataset.play, b.dataset.who, b.dataset.reps); });
     });
     host.querySelectorAll('[data-setreps]').forEach(function (b) {
       b.addEventListener('click', function (e) {
@@ -545,6 +545,22 @@
         setCfgStatus('Досчитал ' + r.healed + ' ' + plural(r.healed, 'пропущенное видео', 'пропущенных видео', 'пропущенных видео') + ' с Диска', 'ok');
       }
     }).catch(function () { /* тихо: список не критичен для остального интерфейса */ });
+  }
+
+  /* Ники и фото всех участников — своя таблица (см. Storage.profiles),
+     не часть общего state, поэтому и обновляется отдельно, тем же
+     паттерном, что и videoIndex выше. Дёргаем при загрузке чата и при
+     открытии Настроек (renderCfg вызывает renderProfilePanel сразу по
+     уже имеющемуся кэшу — свежие данные подтянутся следующим тиком). */
+  function refreshProfiles() {
+    if (Storage.config.read().backend !== 'cloud') return Promise.resolve();
+    return Storage.profiles.list().then(function (r) {
+      var next = {};
+      (r.items || []).forEach(function (p) { next[p.participantId] = p; });
+      profiles = next;
+      if (document.getElementById('v-chat').classList.contains('on')) renderChat();
+      if (document.getElementById('v-cfg').classList.contains('on')) renderProfilePanel();
+    }).catch(function () { /* тихо: ники/фото не критичны для остального интерфейса */ });
   }
 
   /* Видео, которые не долетели до облака даже после повторов и остались
@@ -1198,14 +1214,13 @@
     });
   }
 
-  function openPlayer(path, who, reps, videoId) {
+  function openPlayer(path, who, reps) {
     $('#play-who').textContent = (who || '—') + (reps ? ' · ' + reps + ' повт.' : '');
     $('#play-video').src = '';
     $('#play-video').playbackRate = 1;
     $('#play-msg').textContent = 'Загружаю…';
     $('#play-fallback').href = '#';
     renderSpeedPicker();
-    renderVideoReactions(videoId);
     $('#playOverlay').classList.add('on');
     Storage.video.playUrl(path).then(function (r) {
       $('#play-video').src = r.url;
@@ -1216,40 +1231,6 @@
     });
   }
 
-  /* Реакции на видео в плеере — своя полоса под видео (не в chat-ленте):
-     видео на главной живёт отдельно от чата (см. videoIndex), поэтому и
-     реакции у него свои, через action_react_video/videos.reactions, не
-     через чатовые react_message. videoId может отсутствовать (плеер,
-     открытый по видео-сообщению ИЗ чата — там своя реакция на
-     сообщение) — тогда полоса просто не рисуется. */
-  function renderVideoReactions(videoId) {
-    var host = $('#play-reactions');
-    if (!host) return;
-    if (!videoId) { host.innerHTML = ''; return; }
-    var v = videoIndex.items.filter(function (x) { return x.id === videoId; })[0];
-    var reactions = (v && v.reactions) || {};
-    var mine = myId();
-    host.innerHTML = REACTIONS.map(function (e) {
-      var who = reactions[e] || [];
-      var isMine = who.indexOf(mine) !== -1;
-      return '<button class="' + (isMine ? 'mine' : '') + '" data-vreact="' + e + '">' + e + (who.length ? ' ' + who.length : '') + '</button>';
-    }).join('');
-    host.querySelectorAll('[data-vreact]').forEach(function (b) {
-      b.addEventListener('click', function () {
-        var emoji = b.dataset.vreact;
-        Storage.video.react(mine, videoId, emoji).then(function (updated) {
-          var item = videoIndex.items.filter(function (x) { return x.id === videoId; })[0];
-          if (item) item.reactions = updated.reactions;
-          renderVideoReactions(videoId);
-          // Бейдж с суммой реакций на самой миниатюре — обновляем заодно,
-          // если сейчас открыта «Сегодня» (полный renderToday тут не
-          // накладен: список видео и так недлинный, а не чат на 500 сообщений).
-          if (document.getElementById('v-today').classList.contains('on')) renderToday();
-        }).catch(function (e2) { PCLog.warn('Реакция на видео не отправилась: ' + e2.message); });
-      });
-    });
-  }
-
   /* Открытие вложения по короткому тапу — видео идёт в уже существующий
      плеер, фото/файл получают presigned-ссылку (та же механика, что и
      у видео, см. Storage.chat.attachmentUrl → get_download_url) и
@@ -1257,7 +1238,7 @@
      (картинка, PDF) или предложить скачать — ничего изобретать не
      нужно, это стандартное поведение для прямой ссылки на файл. */
   function openAttachment(m, el) {
-    if (m.type === 'video') { openPlayer(m.videoPath, participantName(m.participantId), m.videoReps); return; }
+    if (m.type === 'video') { openPlayer(m.videoPath, chatDisplayName(m.participantId), m.videoReps); return; }
     var path = m.attachPath;
     if (!path) return;
     if (attachUrlCache[path]) { window.open(attachUrlCache[path], '_blank'); return; }
@@ -1339,6 +1320,16 @@
   function participantName(id) {
     var p = state.participants.filter(function (x) { return x.id === id; })[0];
     return p ? p.name : id;
+  }
+
+  /* Ник — только в чате (по прямому запросу), везде остальном (Сегодня,
+     Журнал, уведомления о закрытии нормы) — настоящее имя, это про
+     учёт по челленджу, там ник ни к чему. Свой ник каждый указывает
+     сам, см. Настройки → Профиль (renderProfilePanel). */
+  function chatDisplayName(id) {
+    var prof = profiles[id];
+    if (prof && prof.nick) return prof.nick;
+    return participantName(id);
   }
 
   function renderWhoPicker(hostSel, selectedId, onPick) {
@@ -1442,6 +1433,17 @@
   function participantInitial(id) {
     var name = participantName(id);
     return name ? name.trim().charAt(0).toUpperCase() : '?';
+  }
+
+  /* Кружок-аватар — фото профиля, если оно указано (см. Настройки →
+     Профиль), иначе прежний цветной кружок с инициалом. Один общий
+     хелпер для всех мест, где раньше был просто цветной кружок с
+     буквой (сообщение в чате, "Кто прочитал", список @упоминаний). */
+  function renderAvatarCircle(id, cls) {
+    cls = cls || 'msg-avatar';
+    var prof = profiles[id];
+    if (prof && prof.avatar) return '<div class="' + cls + ' has-photo"><img src="' + esc(prof.avatar) + '" alt=""></div>';
+    return '<div class="' + cls + '" style="background:' + participantColor(id) + '">' + participantInitial(id) + '</div>';
   }
 
   /* Группировка подряд идущих сообщений одного автора (как в телеге):
@@ -1568,12 +1570,103 @@
     });
   }
 
+  /* ============================================================
+     "Печатает…" — по образцу Telegram: "Артур печатает…", "Артур и Ваня
+     печатают…", "3 чел. печатают…". Источник правды — СЕРВЕР (таблица
+     typing_state на chatstore, см. её комментарий там): каждый
+     запрос /typing возвращает ПОЛНЫЙ актуальный список печатающих,
+     backend рассылает его целиком через Centrifugo, а клиент здесь
+     просто ЗАМЕНЯЕТ свой локальный список этим снимком — не копит
+     собственные +1/-1 события. Так исключён класс багов
+     "рассинхронизировалось, потому что одно сообщение потерялось":
+     даже если клиент пропустил предыдущий снимок, следующий всё
+     равно приведёт его в консистентное состояние. Локальный
+     TYPING_LOCAL_TTL_MS — только подстраховка НА СЛУЧАЙ, если вообще
+     ни один снимок больше не придёт (Centrifugo отвалился): без неё
+     статус завис бы на экране навсегда. */
+  var typingUsers = {};       // participantId -> Date.now() момента последнего полученного снимка, где он был активен
+  var typingSweepTimer = null;
+  var lastTypingPingAt = 0;
+  var TYPING_LOCAL_TTL_MS = 10000; // сильно больше серверного TTL (6с) — это именно аварийная подстраховка, не основной механизм
+  var TYPING_PING_INTERVAL_MS = 2500; // не чаще, чем раз в 2.5с, пока человек печатает
+
+  function renderTypingBar() {
+    var bar = $('#chat-typing-bar');
+    if (!bar) return;
+    var ids = Object.keys(typingUsers);
+    if (!ids.length) { bar.hidden = true; bar.textContent = ''; return; }
+    var names = ids.map(chatDisplayName);
+    var text = names.length === 1 ? (names[0] + ' печатает…')
+      : names.length === 2 ? (names[0] + ' и ' + names[1] + ' печатают…')
+      : (names.length + ' чел. печатают…');
+    bar.textContent = text;
+    bar.hidden = false;
+  }
+
+  function sweepTypingUsers() {
+    var now = Date.now(), changed = false;
+    Object.keys(typingUsers).forEach(function (id) {
+      if (now - typingUsers[id] > TYPING_LOCAL_TTL_MS) { delete typingUsers[id]; changed = true; }
+    });
+    if (!Object.keys(typingUsers).length && typingSweepTimer) { clearInterval(typingSweepTimer); typingSweepTimer = null; }
+    if (changed) renderTypingBar();
+  }
+
+  /* Применить снимок с сервера — id из data.participantIds. Полностью
+     заменяет локальный список, себя из списка исключаем (эхо
+     собственного пинга сервер тоже включает в снимок). */
+  function applyTypingSnapshot(ids) {
+    var mine = myId();
+    var now = Date.now();
+    var next = {};
+    (ids || []).forEach(function (id) { if (id !== mine) next[id] = now; });
+    typingUsers = next;
+    renderTypingBar();
+    if (Object.keys(typingUsers).length && !typingSweepTimer) typingSweepTimer = setInterval(sweepTypingUsers, 1000);
+  }
+
+  /* Свой пинг — не чаще, чем раз в TYPING_PING_INTERVAL_MS, пока в поле
+     ввода есть текст (см. wireTypingPing). Первый же символ уходит
+     сразу (lastTypingPingAt ещё 0) — задержки перед появлением статуса
+     у остальных нет, ограничение касается только повторных пингов на
+     уже идущий набор. */
+  function pingTyping() {
+    var now = Date.now();
+    if (now - lastTypingPingAt < TYPING_PING_INTERVAL_MS) return;
+    lastTypingPingAt = now;
+    var id = myId();
+    if (id) Storage.chat.typing(id, true);
+  }
+
+  /* Мгновенная остановка — не через pingTyping() (та штатно троттлится),
+     шлём сразу и сбрасываем троттлинг, чтобы следующий же символ (если
+     человек передумал и продолжил печатать) снова ушёл без задержки. */
+  function stopTypingNow() {
+    lastTypingPingAt = 0;
+    var id = myId();
+    if (id) Storage.chat.typing(id, false);
+  }
+
+  /* Подписка на #chat-text — отдельной функцией, чтобы вызвать один раз
+     из bind(), но описание логики держать рядом с остальным typing-кодом. */
+  function wireTypingPing() {
+    var input = $('#chat-text');
+    if (!input) return;
+    var wasEmpty = true;
+    input.addEventListener('input', function () {
+      var empty = !this.value.trim();
+      if (empty) { if (!wasEmpty) stopTypingNow(); }
+      else pingTyping();
+      wasEmpty = empty;
+    });
+  }
+
   function renderReplyQuote(m) {
     if (!m.replyTo) return '';
     var orig = chatMessages.filter(function (x) { return x.id === m.replyTo; })[0];
     if (!orig) return '<div class="reply-quote" data-scrollto="' + m.replyTo + '"><b>Ответ на сообщение</b></div>';
     var preview = orig.type === 'video' ? '🎥 видео' : orig.type === 'image' ? '🖼 фото' : orig.type === 'file' ? '📎 ' + (orig.attachName || 'файл') : (orig.text || '').slice(0, 80);
-    return '<div class="reply-quote" data-scrollto="' + orig.id + '"><b>' + esc(participantName(orig.participantId)) + '</b><span>' + esc(preview) + '</span></div>';
+    return '<div class="reply-quote" data-scrollto="' + orig.id + '"><b>' + esc(chatDisplayName(orig.participantId)) + '</b><span>' + esc(preview) + '</span></div>';
   }
 
   /* Упоминания @Имя — подсветка в тексте сообщения (см. также
@@ -1667,7 +1760,7 @@
       var thumb = m.videoThumb ? '<img src="' + m.videoThumb + '" alt="">' : '<div class="chat-vid-noimg">▶</div>';
       var reps = m.videoReps ? '<span class="chat-vid-reps">' + m.videoReps + ' повт.</span>' : '';
       var caption = m.text ? '<div class="bubble-text">' + renderTextWithMentions(m.text) + '<span class="msg-time-inline">' + time + '</span></div>' : '<div class="msg-time-inline" style="float:none;display:block;text-align:right;margin-top:3px;">' + time + '</div>';
-      return '<button class="chat-vid-card" data-play="' + m.videoPath + '" data-who="' + esc(participantName(m.participantId)) + '" data-reps="' + (m.videoReps || '') + '">' +
+      return '<button class="chat-vid-card" data-play="' + m.videoPath + '" data-who="' + esc(chatDisplayName(m.participantId)) + '" data-reps="' + (m.videoReps || '') + '">' +
              thumb + '<span class="chat-vid-play">▶</span>' + reps + '</button>' + caption;
     }
     if (m.type === 'image') {
@@ -1734,10 +1827,10 @@
     if (mine) time += renderReadCount(m);
 
     var avatarHtml = mine ? '' : (isGroupEnd
-      ? '<div class="msg-avatar" style="background:' + participantColor(m.participantId) + '">' + participantInitial(m.participantId) + '</div>'
+      ? renderAvatarCircle(m.participantId, 'msg-avatar')
       : '<div class="avatar-spacer"></div>');
     var senderHtml = (isGroupStart && !mine)
-      ? '<div class="msg-sender-inline" style="color:' + participantColor(m.participantId) + '">' + esc(participantName(m.participantId)) + '</div>'
+      ? '<div class="msg-sender-inline" style="color:' + participantColor(m.participantId) + '">' + esc(chatDisplayName(m.participantId)) + '</div>'
       : '';
 
     var selected = !!selectedIds[m.id];
@@ -2039,8 +2132,8 @@
     var rows = (state.participants || []).map(function (p) {
       var read = readers.indexOf(p.id) !== -1;
       return '<div class="readby-row' + (read ? '' : ' unread') + '">' +
-               '<span class="readby-avatar" style="background:' + participantColor(p.id) + '">' + participantInitial(p.id) + '</span>' +
-               '<span class="readby-name">' + esc(p.name) + '</span>' +
+               renderAvatarCircle(p.id, 'readby-avatar') +
+               '<span class="readby-name">' + esc(chatDisplayName(p.id)) + '</span>' +
                '<span class="readby-status">' + (read ? '✓ прочитано' : 'не видел(а)') + '</span>' +
              '</div>';
     }).join('');
@@ -2108,7 +2201,7 @@
     var texts = chatMessages
       .filter(function (m) { return ids.indexOf(m.id) !== -1; })
       .sort(function (a, b) { return (a.at || '') < (b.at || '') ? -1 : 1; })
-      .map(function (m) { return participantName(m.participantId) + ': ' + (m.text || (m.type === 'video' ? '🎥 видео' : m.type === 'image' ? '🖼 фото' : m.type === 'file' ? '📎 файл' : '')); });
+      .map(function (m) { return chatDisplayName(m.participantId) + ': ' + (m.text || (m.type === 'video' ? '🎥 видео' : m.type === 'image' ? '🖼 фото' : m.type === 'file' ? '📎 файл' : '')); });
     if (!texts.length) return;
     (navigator.clipboard ? navigator.clipboard.writeText(texts.join('\n')) : Promise.reject()).catch(function () {});
     exitSelectMode();
@@ -2297,6 +2390,7 @@
     globalChatSyncStarted = true;
     startChatPolling();
     connectRealtime();
+    refreshProfiles();
   }
 
   function startChatPolling() {
@@ -2345,6 +2439,13 @@
             closeMessageMenu();
             if (document.getElementById('v-chat').classList.contains('on') && !document.hidden) renderChat();
           }
+          return;
+        }
+        /* "Печатает…" — сервер прислал АКТУАЛЬНЫЙ полный список (см.
+           action_typing/typing_state на бэкенде), просто применяем его
+           целиком — см. applyTypingSnapshot. */
+        if (data.type === 'typing') {
+          applyTypingSnapshot(data.participantIds);
           return;
         }
         if (!data.message) return;
@@ -2436,10 +2537,32 @@
     if (dot) { dot.hidden = true; dot.textContent = ''; }
     setAppBadge(0);
     try { localStorage.setItem(LS_LAST_READ, chatMessages.length ? chatMessages[chatMessages.length - 1].id : ''); } catch (e) {}
+    clearChatNotifications();
     /* Best-effort — счётчик "N/4" у остальных чуть задержится, если это
        не удалось, ничего страшного не произошло, поэтому без alert'ов. */
     var myIdVal = myId();
     if (myIdVal) Storage.chat.markRead(myIdVal).catch(function () {});
+  }
+
+  /* Пуш-уведомление о новом сообщении раньше никак не закрывалось само —
+     ни через сколько-то секунд (у Web Push такого таймера в принципе
+     нет, ни у нас, ни в нативных приложениях), ни когда человек реально
+     прочитал сообщение в приложении: оно так и висело в Центре
+     уведомлений/на экране блокировки, пока не смахнёшь вручную. По
+     прямому запросу — закрываем сами, как только чат реально открыт и
+     прочитан (тот же tag, что и в sw.js: 'pcsport-chat', renotify
+     заменяет его следующим пушем, если сообщений несколько подряд, так
+     что закрывать нужно ровно один, максимум). getNotifications() —
+     обычный метод ServiceWorkerRegistration, доступен прямо со страницы,
+     без обмена сообщениями с самим SW. */
+  function clearChatNotifications() {
+    if (!('serviceWorker' in navigator) || !navigator.serviceWorker.getRegistration) return;
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+      if (!reg || !reg.getNotifications) return;
+      return reg.getNotifications({ tag: 'pcsport-chat' });
+    }).then(function (list) {
+      (list || []).forEach(function (n) { n.close(); });
+    }).catch(function () {});
   }
 
   function notifyNewMessages(items) {
@@ -2447,7 +2570,7 @@
     if (!document.hidden) return; // приложение и так на экране — хватит бейджа
     try {
       var last = items[items.length - 1];
-      var title = items.length > 1 ? ('Чат ПЦ Спорт · ' + items.length + ' новых') : ('Чат ПЦ Спорт · ' + participantName(last.participantId));
+      var title = items.length > 1 ? ('Чат ПЦ Спорт · ' + items.length + ' новых') : ('Чат ПЦ Спорт · ' + chatDisplayName(last.participantId));
       var body = last.type === 'video' ? '🎥 видео' : last.type === 'image' ? '🖼 фото' :
         last.type === 'file' ? '📎 ' + (last.attachName || 'файл') : last.text;
       var n = new Notification(title, { body: body, tag: 'pcsport-chat' });
@@ -2558,7 +2681,7 @@
     mentionState = q;
     menu.innerHTML = matches.map(function (p) {
       return '<button type="button" data-pid="' + p.id + '">' +
-        '<span class="mention-avatar" style="background:' + participantColor(p.id) + '">' + participantInitial(p.id) + '</span>' +
+        renderAvatarCircle(p.id, 'mention-avatar') +
         '<span>' + esc(p.name) + '</span></button>';
     }).join('');
     menu.hidden = false;
@@ -2693,7 +2816,7 @@
     var bar = $('#chat-reply-bar');
     if (!bar) return;
     if (!replyingTo) { bar.hidden = true; bar.innerHTML = ''; return; }
-    var name = participantName(replyingTo.participantId);
+    var name = chatDisplayName(replyingTo.participantId);
     var preview = replyingTo.type === 'video' ? '🎥 видео' : replyingTo.type === 'image' ? '🖼 фото' :
       replyingTo.type === 'file' ? '📎 ' + (replyingTo.attachName || 'файл') : (replyingTo.text || '').slice(0, 80);
     bar.hidden = false;
@@ -2909,6 +3032,84 @@
     });
   }
 
+  /* ============================================================
+     Профиль — свой ник и фото (Настройки → Профиль). Правит КАЖДЫЙ
+     только свою же строку в state.participants; сохраняет через тот же
+     commit()/Storage.pull→merge→push конвейер, что и остальное
+     состояние, только дополнительно метит саму строку
+     profileUpdatedAt — см. подробный комментарий в storage.js merge()
+     про построчное слияние участников (иначе конкурентная правка ника
+     с двух телефонов рисковала бы затирать друг друга целиком).
+     ============================================================ */
+  function renderProfilePanel() {
+    var host = $('#cfg-profile');
+    if (!host) return;
+    var id = myId();
+    if (!id) { host.hidden = true; return; }
+    host.hidden = false;
+    var prof = profiles[id] || {};
+    $('#profile-avatar-preview').innerHTML = prof.avatar ? '<img src="' + esc(prof.avatar) + '" alt="">' : esc(participantInitial(id));
+    /* Только если поле не в фокусе — иначе редактирование посреди
+       набора теста перебивало бы курсор каждым фоновым обновлением
+       (renderCfg вызывается из общего render(), в том числе от чужих
+       событий, не только своих правок). */
+    if (document.activeElement !== $('#profile-nick')) $('#profile-nick').value = prof.nick || '';
+  }
+
+  /* Сохраняет ОДНО поле своего профиля (ник или фото) через
+     Storage.profiles.save — своя маленькая таблица на chatstore, не
+     часть общего state.json (см. подробности в сравнении с прошлым
+     подходом в chatstore/app.py над таблицей profiles). Патчим
+     локальный кэш `profiles` сразу же, не дожидаясь следующего
+     refreshProfiles() — тот же принцип, что и у остальных
+     точечных обновлений в приложении. */
+  function saveMyProfileField(field, value) {
+    var id = myId();
+    if (!id) return;
+    var fields = {};
+    fields[field] = value || null;
+    $('#profile-status').textContent = 'Сохраняю…';
+    Storage.profiles.save(id, fields).then(function (prof) {
+      profiles[id] = prof;
+      renderProfilePanel();
+      $('#profile-status').textContent = '';
+    }).catch(function (e) {
+      $('#profile-status').textContent = 'Не сохранилось: ' + e.message;
+      PCLog.warn('Профиль не сохранился (' + field + '): ' + e.message);
+    });
+  }
+
+  /* Фото ужимается до маленького квадрата (та же идея, что и у
+     миниатюры видео, см. grabThumbnail) — иначе фото с телефона в
+     несколько мегабайт легло бы в общий state.json целиком, раздувая
+     КАЖДУЮ синхронизацию для всех четверых, не только при смене фото. */
+  function processAvatarFile(file) {
+    if (!file || file.type.indexOf('image/') !== 0) {
+      PCLog.warn('Фото профиля: выбранный файл — не изображение');
+      return;
+    }
+    var img = new Image();
+    var url = URL.createObjectURL(file);
+    img.onload = function () {
+      URL.revokeObjectURL(url);
+      var size = 160;
+      var side = Math.min(img.naturalWidth, img.naturalHeight);
+      var sx = (img.naturalWidth - side) / 2, sy = (img.naturalHeight - side) / 2;
+      var canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+      var dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+      saveMyProfileField('avatar', dataUrl);
+      PCLog.info('Фото профиля обновлено');
+    };
+    img.onerror = function () {
+      URL.revokeObjectURL(url);
+      PCLog.warn('Фото профиля: не удалось прочитать файл');
+    };
+    img.src = url;
+  }
+
   /* Коротко, по 2-4 пункта на версию, только заметное человеку —
      полная история со всеми техническими деталями в README.md проекта.
      Обновлять при каждом бампе версии в шапке. */
@@ -2916,10 +3117,13 @@
      тут смысла нет (она и так вся есть в README.md, для читателя
      приложения важно только "что изменилось только что"). */
   var CHANGELOG = [
-    { v: 'v67', items: [
-      'В чате больше реакций — набор расширен до 8 (как в Telegram): 👍❤️🔥😂😢👀🤝💪',
-      'Видно, сколько реакций набрало каждое видео — счётчик прямо на миниатюре, ставить/снимать реакцию можно из плеера',
-      'Добавлен таймер тренировки — старт/стоп на «Сегодня», пока идёт, отсчёт виден сверху приложения на любой вкладке'
+    { v: 'v68', items: [
+      'Реакций в чате теперь 24 (3 строки) вместо 8',
+      'В Настройках — фото профиля и свой ник; в чате виден ник, если он указан',
+      'В чате появился индикатор «печатает…» — видно, кто сейчас набирает сообщение',
+      'Настройки разбиты на разделы (Профиль, Подключения, Челлендж и т. д.) — было одним длинным списком',
+      'Пуш-уведомление о сообщении теперь закрывается само, как только чат реально прочитан, и реже приходит тем, кто уже смотрит в чат',
+      'Убраны реакции на видео на «Сегодня» — работали нестабильно'
     ] }
   ];
 
@@ -2936,6 +3140,7 @@
   function renderCfg() {
     renderLogBox();
     renderCfgWho();
+    renderProfilePanel();
     renderChangelog();
     refreshDiskUsage();
     $('#cfg-papich').checked = papichEnabled();
@@ -3399,12 +3604,15 @@
       openIdentityGate();
     });
 
+    wireTypingPing();
+
     $('#chat-form').addEventListener('submit', function (e) {
       e.preventDefault();
       var inp = $('#chat-text');
       var text = inp.value;
       if (!text.trim()) return;
       inp.value = '';
+      stopTypingNow(); // очистка поля программная — 'input' не всплывает, шлём явно
       /* Раньше здесь был флаг chatSending, блокировавший форму целиком
          до завершения сетевого запроса предыдущего сообщения — то есть
          набрать и отправить второе сообщение было физически нельзя,
@@ -3668,6 +3876,17 @@
     /* Стоп — без подтверждения (в отличие от удаления видео/сообщения):
        ничего не теряется, случайно остановленный таймер снова запускается
        одним тапом. Лишний диалог тут был бы просто трением. */
+    /* Профиль — ник сохраняется по blur (change), фото сразу по выбору
+       файла (тот же паттерн, что и у #cfg-anchor/#cfg-file ниже). */
+    $('#profile-nick').addEventListener('change', function () {
+      saveMyProfileField('nick', this.value.trim().slice(0, 24));
+    });
+    $('#profile-avatar-btn').addEventListener('click', function () { $('#profile-avatar-file').click(); });
+    $('#profile-avatar-file').addEventListener('change', function () {
+      if (this.files && this.files[0]) processAvatarFile(this.files[0]);
+      this.value = '';
+    });
+
     $('#ql-timer').addEventListener('click', function () {
       if (workoutTimerStartedAt()) stopWorkoutTimer(); else startWorkoutTimer();
     });

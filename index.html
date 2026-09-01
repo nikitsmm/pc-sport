@@ -18,7 +18,7 @@
      браузер (и особенно PWA на iOS) мог отдавать старый styles.css/app.js
      к уже обновившемуся index.html: получалась смесь старой и новой
      версии, и правки "не доезжали". Меняется вместе с номером версии. -->
-<link rel="stylesheet" href="styles.css?v=67">
+<link rel="stylesheet" href="styles.css?v=68">
 </head>
 <body>
 
@@ -42,7 +42,7 @@
 
 <div class="header-sticky" id="header-sticky">
 <header class="appbar">
-  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v67 · 31.08.2026</span></div>
+  <div class="brand">ПЦ Спорт <span class="ver" id="appVersion">v68 · 01.09.2026</span></div>
   <button id="who-btn" class="who-btn">Кто я?</button>
   <span class="sync-dot local" id="sync-dot" title="Только локально"></span>
   <div class="clock" id="clock"><b>—:—:—</b>до дедлайна</div>
@@ -204,6 +204,10 @@
       <input type="file" id="attach-input-media" accept="image/*,video/*" hidden>
       <input type="file" id="attach-input-file" hidden>
       <div class="emoji-picker" id="emoji-picker" hidden></div>
+      <!-- "Артур печатает…" — над самим полем ввода, как в Telegram.
+           Текст собирается в renderTypingBar() (app.js) по тому, кто
+           прислал "typing"-пинг через Centrifugo за последние секунды. -->
+      <div class="chat-typing-bar" id="chat-typing-bar" hidden></div>
       <form class="chat-input" id="chat-form">
         <div class="chat-input-pill">
           <button class="chat-icon-btn" id="chat-attach-btn" type="button" title="Прикрепить">
@@ -278,111 +282,161 @@
 
   <!-- ================= НАСТРОЙКИ ================= -->
   <section class="view" id="v-cfg">
-    <h2>Уведомления</h2>
-    <div class="panel">
-      <p class="h" style="margin:0 0 10px">Приходит даже когда приложение полностью закрыто. На iPhone — только если приложение добавлено на «Экран Домой» (Safari → «Поделиться» → «На экран "Домой"»); из обычной вкладки Safari push не работает — это ограничение самого iOS, обойти нельзя.</p>
-      <button class="btn" id="cfg-notify" style="width:100%">Включить уведомления о новых сообщениях</button>
-      <div class="status-line" id="cfg-notify-status"></div>
-    </div>
 
-    <h2>Разное</h2>
-    <div class="panel">
-      <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
-        <input type="checkbox" id="cfg-papich" style="width:18px;height:18px">
-        <span>Режим Папич (заставка при открытии + фон в чате)</span>
-      </label>
-    </div>
+    <!-- Настройки разбиты на крупные разделы (по прямому запросу —
+         раньше это был один длинный список без визуальной иерархии).
+         Внутри раздела — прежние подпункты (те же h2+panel), просто
+         сгруппированные под общим заголовком .cfg-group-title. Все id
+         элементов не менялись — только разметка вокруг них. -->
 
-    <h2>Что нового</h2>
-    <div class="panel" id="cfg-changelog"></div>
+    <div class="cfg-group">
+      <div class="cfg-group-title"><span class="g">👤</span>Профиль</div>
 
-    <h2>Кто я</h2>
-    <div class="panel">
-      <p class="h" style="margin:0 0 10px">Отмечать дни и грузить видео можно только за себя. Локально на этом телефоне, не синхронизируется.</p>
-      <div class="who-grid compact" id="cfg-who-pick"></div>
-    </div>
-
-    <h2>Синхронизация</h2>
-    <div class="panel">
-      <label for="cfg-backend">Где хранятся данные</label>
-      <select id="cfg-backend">
-        <option value="local">Только на этом устройстве</option>
-        <option value="cloud">Общее состояние через облачную функцию</option>
-      </select>
-
-      <div id="cfg-cloud" hidden>
-        <label for="cfg-url">URL облачной функции</label>
-        <input id="cfg-url" type="text" autocomplete="off" placeholder="https://functions.yandexcloud.net/…">
-        <p class="h">Токен Яндекс.Диска в приложении не участвует — он живёт только внутри самой функции (см. backend/index.py и переменную окружения YADISK_TOKEN). У всех участников должен быть один и тот же URL.</p>
+      <h2>Кто я</h2>
+      <div class="panel">
+        <p class="h" style="margin:0 0 10px">Отмечать дни и грузить видео можно только за себя. Локально на этом телефоне, не синхронизируется.</p>
+        <div class="who-grid compact" id="cfg-who-pick"></div>
       </div>
 
-      <div class="row" style="margin-top:16px;flex-wrap:wrap;gap:8px">
-        <button class="btn" id="cfg-save">Сохранить</button>
+      <!-- Ник и фото — видны только когда идентичность уже выбрана (см.
+           renderProfilePanel в app.js), редактировать можно только своё.
+           Ник заменяет имя ТОЛЬКО в чате (по прямому запросу), на
+           «Сегодня»/в Журнале везде остаётся настоящее имя. -->
+      <h2>Мой профиль в чате</h2>
+      <div class="panel" id="cfg-profile" hidden>
+        <div class="profile-row">
+          <button type="button" class="profile-avatar-btn" id="profile-avatar-btn" title="Изменить фото">
+            <span id="profile-avatar-preview"></span>
+            <span class="profile-avatar-edit">✎</span>
+          </button>
+          <div class="profile-fields">
+            <label for="profile-nick">Ник в чате</label>
+            <input id="profile-nick" type="text" maxlength="24" autocomplete="off" placeholder="например, art">
+          </div>
+        </div>
+        <input id="profile-avatar-file" type="file" accept="image/*" hidden>
+        <p class="h" style="margin-top:10px">Если ник не указан — в чате видно настоящее имя, как и раньше.</p>
+        <div class="status-line" id="profile-status"></div>
       </div>
-      <p class="h" style="margin-top:10px">Кнопка «↻ Обновить» — на вкладке «Сегодня», сверху.</p>
-      <div class="status-line" id="cfg-status"></div>
     </div>
 
-    <h2>Участники и нормы</h2>
-    <div class="panel" id="cfg-people"></div>
+    <div class="cfg-group">
+      <div class="cfg-group-title"><span class="g">🔌</span>Подключения</div>
 
-    <h2>Отсчёт чередования</h2>
-    <div class="panel">
-      <label for="cfg-anchor">В этот день чередующиеся делают подтягивания</label>
-      <input id="cfg-anchor" type="date">
-      <p class="h">Дальше подтягивания и отжимания идут через день от этой даты.</p>
+      <h2>Уведомления</h2>
+      <div class="panel">
+        <p class="h" style="margin:0 0 10px">Приходит даже когда приложение полностью закрыто. На iPhone — только если приложение добавлено на «Экран Домой» (Safari → «Поделиться» → «На экран "Домой"»); из обычной вкладки Safari push не работает — это ограничение самого iOS, обойти нельзя.</p>
+        <button class="btn" id="cfg-notify" style="width:100%">Включить уведомления о новых сообщениях</button>
+        <div class="status-line" id="cfg-notify-status"></div>
+      </div>
+
+      <h2>Синхронизация</h2>
+      <div class="panel">
+        <label for="cfg-backend">Где хранятся данные</label>
+        <select id="cfg-backend">
+          <option value="local">Только на этом устройстве</option>
+          <option value="cloud">Общее состояние через облачную функцию</option>
+        </select>
+
+        <div id="cfg-cloud" hidden>
+          <label for="cfg-url">URL облачной функции</label>
+          <input id="cfg-url" type="text" autocomplete="off" placeholder="https://functions.yandexcloud.net/…">
+          <p class="h">Токен Яндекс.Диска в приложении не участвует — он живёт только внутри самой функции (см. backend/index.py и переменную окружения YADISK_TOKEN). У всех участников должен быть один и тот же URL.</p>
+        </div>
+
+        <div class="row" style="margin-top:16px;flex-wrap:wrap;gap:8px">
+          <button class="btn" id="cfg-save">Сохранить</button>
+        </div>
+        <p class="h" style="margin-top:10px">Кнопка «↻ Обновить» — на вкладке «Сегодня», сверху.</p>
+        <div class="status-line" id="cfg-status"></div>
+      </div>
     </div>
 
-    <h2>Видео</h2>
-    <div class="panel">
-      <p class="h">Список видео на вкладке «Сегодня» и так сверяется с хранилищем при каждом открытии — «Проверить сейчас» нужна, только если не хочется ждать.</p>
-      <div class="row" style="margin-top:12px;gap:8px">
-        <button class="btn ghost" id="cfg-sync-video" style="flex:1">Проверить видео</button>
-      </div>
-      <div class="status-line" id="cfg-video-status"></div>
+    <div class="cfg-group">
+      <div class="cfg-group-title"><span class="g">⚙</span>Челлендж</div>
 
-      <p class="h" style="margin-top:16px">Видео хранятся <span id="cfg-retention-days">5</span> дней, потом должны удаляться сами по расписанию (раз в сутки, ночью). Кнопка ниже запускает ту же очистку прямо сейчас — можно своими глазами убедиться, что старое реально удаляется, а не просто верить на слово.</p>
-      <div class="row" style="margin-top:10px;gap:8px">
-        <button class="btn ghost" id="cfg-cleanup-now" style="flex:1">Почистить старые видео сейчас</button>
-      </div>
-      <div class="status-line" id="cfg-cleanup-status"></div>
+      <h2>Участники и нормы</h2>
+      <div class="panel" id="cfg-people"></div>
 
-      <p class="h" style="margin-top:16px">Место на диске (видео хранится на самой виртуалке):</p>
-      <div class="status-line" id="cfg-disk-usage">—</div>
+      <h2>Отсчёт чередования</h2>
+      <div class="panel">
+        <label for="cfg-anchor">В этот день чередующиеся делают подтягивания</label>
+        <input id="cfg-anchor" type="date">
+        <p class="h">Дальше подтягивания и отжимания идут через день от этой даты.</p>
+      </div>
+
+      <h2>Разное</h2>
+      <div class="panel">
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" id="cfg-papich" style="width:18px;height:18px">
+          <span>Режим Папич (заставка при открытии + фон в чате)</span>
+        </label>
+      </div>
     </div>
 
-    <h2>Данные</h2>
-    <div class="panel">
-      <div class="row" style="flex-wrap:wrap;gap:8px">
-        <button class="btn ghost" id="cfg-export">Выгрузить JSON</button>
-        <button class="btn ghost" id="cfg-import">Загрузить JSON</button>
-        <button class="btn danger" id="cfg-reset">Сбросить всё</button>
+    <div class="cfg-group">
+      <div class="cfg-group-title"><span class="g">🎥</span>Видео</div>
+      <div class="panel">
+        <p class="h">Список видео на вкладке «Сегодня» и так сверяется с хранилищем при каждом открытии — «Проверить сейчас» нужна, только если не хочется ждать.</p>
+        <div class="row" style="margin-top:12px;gap:8px">
+          <button class="btn ghost" id="cfg-sync-video" style="flex:1">Проверить видео</button>
+        </div>
+        <div class="status-line" id="cfg-video-status"></div>
+
+        <p class="h" style="margin-top:16px">Видео хранятся <span id="cfg-retention-days">5</span> дней, потом должны удаляться сами по расписанию (раз в сутки, ночью). Кнопка ниже запускает ту же очистку прямо сейчас — можно своими глазами убедиться, что старое реально удаляется, а не просто верить на слово.</p>
+        <div class="row" style="margin-top:10px;gap:8px">
+          <button class="btn ghost" id="cfg-cleanup-now" style="flex:1">Почистить старые видео сейчас</button>
+        </div>
+        <div class="status-line" id="cfg-cleanup-status"></div>
+
+        <p class="h" style="margin-top:16px">Место на диске (видео хранится на самой виртуалке):</p>
+        <div class="status-line" id="cfg-disk-usage">—</div>
       </div>
-      <input id="cfg-file" type="file" accept="application/json,.json" hidden>
-      <p class="h" id="cfg-version">—</p>
     </div>
 
-    <h2>Диагностика виртуалки</h2>
-    <div class="panel">
-      <p class="h" style="margin:0 0 10px">Проверяет разом всё, что держит приложение на ходу: чат, реальное время, видео-хранилище, место на диске, push. Если что-то не работает — жми, копируй результат и присылай, вместо скриншота.</p>
-      <button class="btn" id="health-check-run" style="width:100%">Проверить всё</button>
-      <div class="log-box" id="health-check-box" hidden></div>
-      <div class="row" style="margin-top:10px;gap:8px" id="health-check-actions" hidden>
-        <button class="btn ghost" id="health-check-copy" style="flex:1">Скопировать</button>
+    <div class="cfg-group">
+      <div class="cfg-group-title"><span class="g">🛠</span>Данные и диагностика</div>
+
+      <h2>Данные</h2>
+      <div class="panel">
+        <div class="row" style="flex-wrap:wrap;gap:8px">
+          <button class="btn ghost" id="cfg-export">Выгрузить JSON</button>
+          <button class="btn ghost" id="cfg-import">Загрузить JSON</button>
+          <button class="btn danger" id="cfg-reset">Сбросить всё</button>
+        </div>
+        <input id="cfg-file" type="file" accept="application/json,.json" hidden>
+        <p class="h" id="cfg-version">—</p>
       </div>
-      <div class="status-line" id="health-check-status"></div>
+
+      <h2>Диагностика виртуалки</h2>
+      <div class="panel">
+        <p class="h" style="margin:0 0 10px">Проверяет разом всё, что держит приложение на ходу: чат, реальное время, видео-хранилище, место на диске, push. Если что-то не работает — жми, копируй результат и присылай, вместо скриншота.</p>
+        <button class="btn" id="health-check-run" style="width:100%">Проверить всё</button>
+        <div class="log-box" id="health-check-box" hidden></div>
+        <div class="row" style="margin-top:10px;gap:8px" id="health-check-actions" hidden>
+          <button class="btn ghost" id="health-check-copy" style="flex:1">Скопировать</button>
+        </div>
+        <div class="status-line" id="health-check-status"></div>
+      </div>
+
+      <h2>Логи</h2>
+      <div class="panel">
+        <p class="h" style="margin:0 0 10px">Если что-то не работает — скопируй и пришли эти строки, так проще найти причину, чем по скриншоту.</p>
+        <div class="log-box" id="log-box"></div>
+        <div class="row" style="margin-top:10px;gap:8px">
+          <button class="btn ghost" id="log-copy" style="flex:1">Скопировать</button>
+          <button class="btn ghost" id="log-clear">Очистить</button>
+        </div>
+        <div class="status-line" id="log-status"></div>
+      </div>
     </div>
 
-    <h2>Логи</h2>
-    <div class="panel">
-      <p class="h" style="margin:0 0 10px">Если что-то не работает — скопируй и пришли эти строки, так проще найти причину, чем по скриншоту.</p>
-      <div class="log-box" id="log-box"></div>
-      <div class="row" style="margin-top:10px;gap:8px">
-        <button class="btn ghost" id="log-copy" style="flex:1">Скопировать</button>
-        <button class="btn ghost" id="log-clear">Очистить</button>
-      </div>
-      <div class="status-line" id="log-status"></div>
+    <div class="cfg-group">
+      <div class="cfg-group-title"><span class="g">ℹ</span>О приложении</div>
+      <h2>Что нового</h2>
+      <div class="panel" id="cfg-changelog"></div>
     </div>
+
   </section>
 
 </main>
@@ -441,9 +495,6 @@
     <div class="rec-head"><span id="play-who">—</span><button id="play-close" class="close-safe" aria-label="Закрыть просмотр">← Закрыть</button></div>
     <div class="rec-stage"><video id="play-video" playsinline controls></video></div>
     <div class="speed-pick" id="play-speed"></div>
-    <!-- Реакции на само видео — тот же принцип, что и в чате: тап по
-         своему эмодзи ставит/снимает, счётчик виден сразу под плеером. -->
-    <div class="vid-react-row" id="play-reactions"></div>
     <div class="rec-msg" id="play-msg"></div>
     <div class="rec-controls">
       <a class="btn cam" id="play-fallback" href="#" target="_blank" rel="noopener">Открыть ссылкой</a>
@@ -452,9 +503,9 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/centrifuge@5/dist/centrifuge.js"></script>
-<script src="log.js?v=67"></script>
-<script src="video.js?v=67"></script>
-<script src="storage.js?v=67"></script>
-<script src="app.js?v=67"></script>
+<script src="log.js?v=68"></script>
+<script src="video.js?v=68"></script>
+<script src="storage.js?v=68"></script>
+<script src="app.js?v=68"></script>
 </body>
 </html>
